@@ -1,0 +1,403 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Department {
+  id        String  @id @default(cuid())
+  name      String
+  code      String  @unique
+  managerId String?
+  users     User[]
+  visits    Visit[]
+}
+
+model User {
+  id            String       @id @default(cuid())
+  email         String       @unique
+  passwordHash  String
+  name          String
+  role          String
+  departmentId  String?
+  department    Department?  @relation(fields: [departmentId], references: [id])
+  phone         String?
+  jobTitle      String?
+  payrollNo     String?
+  managerName   String?
+  accessGroup   String?
+  isActive      Boolean      @default(true)
+  hostedVisits  Visit[]      @relation("Host")
+  createdVisits Visit[]      @relation("CreatedBy")
+  lineReviews   Visit[]      @relation("LineManager")
+  approvals     Approval[]
+  checkIns      Visit[]      @relation("CheckedInBy")
+  checkOuts     Visit[]      @relation("CheckedOutBy")
+  notifications Notification[]
+  auditLogs     AuditLog[]
+  serviceOwns   GuestServiceOwner[]
+  serviceUpdates VisitServiceUpdate[]
+  parkingHeld     ParkingAssignment[] @relation("ParkingHolder")
+  parkingAssigned ParkingAssignment[] @relation("ParkingAssignedBy")
+  roomHolds       RoomHold[]          @relation("RoomHolds")
+}
+
+model Visitor {
+  id              String         @id @default(cuid())
+  fullName        String
+  mobile          String
+  email           String?
+  nationality     String?
+  company         String?
+  jobTitle        String?
+  visitorType     String
+  idType          String?
+  idReference     String?
+  photoUrl        String?
+  restricted      Boolean        @default(false)
+  restrictionNote String?
+  visitLinks      VisitVisitor[]
+
+  @@index([mobile])
+  @@index([fullName])
+}
+
+model Visit {
+  id                  String         @id @default(cuid())
+  visitCode           String         @unique
+  type                String
+  status              String
+  purpose             String
+  description         String?
+  visitDate           DateTime
+  expectedArrival     DateTime
+  expectedDeparture   DateTime?
+  hostId              String
+  host                User           @relation("Host", fields: [hostId], references: [id])
+  departmentId        String
+  department          Department     @relation(fields: [departmentId], references: [id])
+  location            String?
+  meetingRoom         String?
+  visitorCount        Int            @default(1)
+  parkingRequired     Boolean        @default(false)
+  specialRequirements String?
+  attachmentsJson     String?
+  internalNotes       String?
+  vip                 Boolean        @default(false)
+  accessArea          String?
+  qrToken             String         @unique
+  createdById         String
+  createdBy           User           @relation("CreatedBy", fields: [createdById], references: [id])
+  lineManagerId       String?
+  lineManager         User?          @relation("LineManager", fields: [lineManagerId], references: [id])
+  cancelledBy         String?
+  cancelReason        String?
+  cancelSource        String?
+  checkInAt           DateTime?
+  checkInById         String?
+  checkInBy           User?          @relation("CheckedInBy", fields: [checkInById], references: [id])
+  entryGate           String?
+  verificationStatus  String?
+  checkOutAt          DateTime?
+  checkOutById        String?
+  checkOutBy          User?          @relation("CheckedOutBy", fields: [checkOutById], references: [id])
+  exitGate            String?
+  badgeReturned       Boolean?
+  durationMinutes     Int?
+  invitationSentAt    DateTime?
+  invitationChannel   String?
+  fromAbroad          Boolean        @default(false)
+  originCountry       String?
+  originCity          String?
+  stayNights          Int?
+  stayFrom            DateTime?
+  stayTo              DateTime?
+  flightArrival       String?
+  flightDeparture     String?
+  hotelRequired       Boolean        @default(false)
+  hotelName           String?
+  hotelBookingStatus  String?
+  hotelRoomType       String?
+  pickupRequired      Boolean        @default(false)
+  pickupType          String?
+  pickupFrom          String?
+  pickupTime          String?
+  dropoffRequired     Boolean        @default(false)
+  mealBreakfast       Boolean        @default(false)
+  mealLunch           Boolean        @default(false)
+  mealDinner          Boolean        @default(false)
+  dietaryNeeds        String?
+  hospitalityNotes    String?
+  oneTimeVisit        Boolean        @default(false)
+  qrCheckInRequired   Boolean        @default(true)
+  guestNeedsJson      String?
+  source              String         @default("PORTAL")
+  emailMessageId      String?        @unique
+  emailSubject        String?
+  emailFrom           String?
+  guestKind           String?
+  driverRequired      Boolean        @default(false)
+  driverName          String?
+  driverMobile        String?
+  driverVehicle       String?
+  giftRequired        Boolean        @default(false)
+  giftType            String?
+  driverStatus        String?
+  giftStatus          String?
+  driverNote          String?
+  giftNote            String?
+  gatePassRequired    Boolean        @default(false)
+  gatePassStatus      String?
+  gatePassNote        String?
+  escalationNotes     String?
+  intakeNotes           String?
+  outlookEventId        String?
+  outlookRoomEmail      String?
+  roomConfirmRepliedAt  DateTime?
+  visitors            VisitVisitor[]
+  vehicles            Vehicle[]
+  approvals           Approval[]
+  timeline            TimelineEvent[]
+  notifications       Notification[]
+  badges              Badge[]
+  auditLogs           AuditLog[]
+  serviceTasks        VisitServiceTask[]
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  @@index([status])
+  @@index([visitDate])
+  @@index([type])
+  @@index([source])
+}
+
+model VisitVisitor {
+  id        String  @id @default(cuid())
+  visitId   String
+  visit     Visit   @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  visitorId String
+  visitor   Visitor @relation(fields: [visitorId], references: [id])
+  isPrimary Boolean @default(false)
+}
+
+model Vehicle {
+  id          String  @id @default(cuid())
+  visitId     String
+  visit       Visit   @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  plate       String
+  vehicleType String?
+  parkingSlot String?
+}
+
+model Badge {
+  id         String    @id @default(cuid())
+  visitId    String
+  visit      Visit     @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  number     String    @unique
+  issuedAt   DateTime  @default(now())
+  returnedAt DateTime?
+  closed     Boolean   @default(false)
+}
+
+model Approval {
+  id           String    @id @default(cuid())
+  visitId      String
+  visit        Visit     @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  stepOrder    Int
+  stepName     String
+  requiredRole String
+  assigneeId   String?
+  assignee     User?     @relation(fields: [assigneeId], references: [id])
+  status       String
+  comments     String?
+  decidedAt    DateTime?
+}
+
+model ApprovalRule {
+  id              String  @id @default(cuid())
+  visitType       String
+  departmentCode  String?
+  visitorCategory String?
+  vip             Boolean @default(false)
+  stepsJson       String
+  isActive        Boolean @default(true)
+}
+
+model TimelineEvent {
+  id        String   @id @default(cuid())
+  visitId   String
+  visit     Visit    @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  event     String
+  note      String?
+  userId    String?
+  createdAt DateTime @default(now())
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  visitId   String?
+  visit     Visit?   @relation(fields: [visitId], references: [id])
+  type      String
+  title     String
+  message   String
+  channel   String   @default("IN_APP")
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model AuditLog {
+  id            String   @id @default(cuid())
+  userId        String?
+  user          User?    @relation(fields: [userId], references: [id])
+  visitId       String?
+  visit         Visit?   @relation(fields: [visitId], references: [id])
+  action        String
+  module        String
+  previousValue String?
+  newValue      String?
+  createdAt     DateTime @default(now())
+}
+
+model SystemSetting {
+  key   String @id
+  value String
+}
+
+model Lookup {
+  id     String  @id @default(cuid())
+  kind   String
+  code   String
+  label  String
+  active Boolean @default(true)
+
+  @@unique([kind, code])
+}
+
+model GuestService {
+  id          String              @id @default(cuid())
+  code        String              @unique
+  label       String
+  hint        String
+  description String?
+  category    String
+  maps        String?
+  active      Boolean             @default(true)
+  sortOrder   Int                 @default(0)
+  owners      GuestServiceOwner[]
+  tasks       VisitServiceTask[]
+}
+
+model GuestServiceOwner {
+  id        String       @id @default(cuid())
+  serviceId String
+  service   GuestService @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([serviceId, userId])
+}
+
+model VisitServiceTask {
+  id              String               @id @default(cuid())
+  visitId         String
+  visit           Visit                @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  serviceId       String
+  service         GuestService         @relation(fields: [serviceId], references: [id])
+  requesterNotes  String?
+  status          String               @default("REQUESTED")
+  updates         VisitServiceUpdate[]
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  @@unique([visitId, serviceId])
+}
+
+model VisitServiceUpdate {
+  id        String           @id @default(cuid())
+  taskId    String
+  task      VisitServiceTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  status    String
+  note      String?
+  userId    String
+  user      User             @relation(fields: [userId], references: [id])
+  createdAt DateTime         @default(now())
+}
+
+model DisplayScreen {
+  id         String   @id @default(cuid())
+  name       String
+  kind       String
+  roomKey    String?  @unique
+  roomEmail  String?
+  sizeInches Int      @default(65)
+  token      String   @unique
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+}
+
+model DisplayMedia {
+  id        String   @id @default(cuid())
+  path      String
+  createdAt DateTime @default(now())
+}
+
+model DisplaySetup {
+  id           String    @id @default(cuid())
+  message      String
+  imagePath    String
+  target       String
+  screenIds    String    @default("[]")
+  screenImages String    @default("{}")
+  status       String    @default("DRAFT")
+  publishedAt  DateTime?
+  createdBy    String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+model ParkingAssignment {
+  id           String   @id @default(cuid())
+  slot         String   @unique
+  userId       String
+  user         User     @relation("ParkingHolder", fields: [userId], references: [id])
+  assignedById String
+  assignedBy   User     @relation("ParkingAssignedBy", fields: [assignedById], references: [id])
+  plate        String   @default("")
+  vehicleType  String?
+  vehicles     String   @default("[]")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model RoomHold {
+  id              String    @id @default(cuid())
+  eventId         String    @unique
+  roomName        String
+  roomEmail       String    @default("")
+  subject         String
+  description     String    @default("")
+  startAt         DateTime
+  endAt           DateTime
+  bookedById      String
+  bookedBy        User      @relation("RoomHolds", fields: [bookedById], references: [id])
+  bookedByEmail   String
+  bookedByName    String
+  organizerEmail  String    @default("")
+  invitees        String    @default("[]")
+  roomReply       String?
+  repliedAt       DateTime?
+  bookerInvitedAt DateTime?
+  bookerEventId   String?
+  cancelledAt     DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([bookedById])
+  @@index([subject])
+}

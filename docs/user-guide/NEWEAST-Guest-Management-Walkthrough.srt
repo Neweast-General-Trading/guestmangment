@@ -1,0 +1,147 @@
+1
+00:00:00,020 --> 00:00:13,010
+This is Guest Management, a module of the NEWEAST Intranet. Open it from the Intranet, or go to guest.neweast.cloud.
+
+2
+00:00:13,060 --> 00:00:26,340
+Any employee, in any department, can raise a visit. Watch the role on screen. That tells you which part of the module you are in.
+
+3
+00:00:26,390 --> 00:00:42,980
+The requester asks. The line manager approves. Reception prepares. Marketing handles a gift if asked. HR prepares a gate pass if asked. The guard welcomes the guest.
+
+4
+00:00:43,030 --> 00:00:57,140
+Chapter one. The requester raises a visit. The line manager must approve it before Reception can prepare.
+
+5
+00:00:57,190 --> 00:01:16,880
+Requester — This is the visit form. Set the date, arrival time, department, and the purpose.
+
+6
+00:01:16,930 --> 00:01:43,750
+Requester — Set the number of guests. The form opens one card per guest. Name, mobile, and email are required.
+
+7
+00:01:43,800 --> 00:01:59,020
+Requester — Ask only for what you need. Here we request a driver, a welcome gift, and a gate pass.
+
+8
+00:01:59,070 --> 00:02:15,170
+Requester — Submit. The request goes to the line manager first.
+
+9
+00:02:15,220 --> 00:02:28,250
+Requester — History shows the live status. It is with the line manager, waiting for approval.
+
+10
+00:02:28,300 --> 00:02:38,110
+Chapter two. The line manager reviews the request and decides.
+
+11
+00:02:38,160 --> 00:02:48,990
+Line manager — Open Approve. Waiting requests sit here.
+
+12
+00:02:49,040 --> 00:03:09,820
+Line manager — Read the guests, add a short comment, and approve.
+
+13
+00:03:09,870 --> 00:03:19,490
+Line manager — Approved. Reception can now prepare the visit.
+
+14
+00:03:19,540 --> 00:03:31,630
+Requester — History updates after approval. The visit is now with Administration.
+
+15
+00:03:31,680 --> 00:03:44,410
+Chapter three. Reception, Marketing, and HR prepare what was asked.
+
+16
+00:03:44,460 --> 00:03:56,030
+Reception — Staff requests arrive in one inbox. Open the visit.
+
+17
+00:03:56,080 --> 00:04:12,800
+Reception — Choose a free meeting room, and assign the driver.
+
+18
+00:04:12,850 --> 00:04:34,970
+Reception — Mark the driver done, then confirm to book the room in Outlook.
+
+19
+00:04:35,020 --> 00:04:50,070
+Reception — A gift is waiting. Marketing prepares it before Reception marks it done.
+
+20
+00:04:50,120 --> 00:05:06,440
+Marketing — Gift requests open here. Approve so the gift moves to Preparing.
+
+21
+00:05:06,490 --> 00:05:24,120
+Marketing — The gift is preparing. Reception will mark it done when it arrives.
+
+22
+00:05:24,170 --> 00:05:37,360
+Reception — The gift is ready. Mark it done.
+
+23
+00:05:37,410 --> 00:05:52,690
+Reception — A gate pass is waiting. HR prepares it, the same way Marketing prepares a gift.
+
+24
+00:05:52,740 --> 00:06:08,440
+HR — Gate pass requests open here. Approve so the pass moves to Preparing.
+
+25
+00:06:08,500 --> 00:06:24,240
+HR — The gate pass is preparing. Reception will mark it done when it is in hand.
+
+26
+00:06:24,290 --> 00:06:39,180
+Reception — The gate pass is ready. Mark it done, then send the party to the guard.
+
+27
+00:06:39,230 --> 00:06:53,460
+Reception — Submit to Security puts both guests on today’s list at the gate.
+
+28
+00:06:53,510 --> 00:07:04,490
+Chapter four. Book a room only. No visitor request is needed.
+
+29
+00:07:04,540 --> 00:07:22,390
+Reception — Click a free slot, set the subject, and book in Outlook.
+
+30
+00:07:22,440 --> 00:07:31,320
+Reception — The meeting is on the rooms board. Invitees can be added on the card.
+
+31
+00:07:31,370 --> 00:07:42,170
+Chapter five. The guard. Check the guest in, then check the guest out.
+
+32
+00:07:42,220 --> 00:07:53,950
+Guard — Today’s list shows who is expected. The QR reader is for invitation codes.
+
+33
+00:07:54,000 --> 00:08:05,680
+Guard — Open the visit to record entry.
+
+34
+00:08:05,730 --> 00:08:16,960
+Guard — Check in. Both guests are now inside Headquarters.
+
+35
+00:08:17,010 --> 00:08:46,800
+Guard — When the visit ends, check out. Same visit, same desk.
+
+36
+00:08:46,850 --> 00:08:54,450
+Guard — Done. The guest is on the record from arrival to departure.
+
+37
+00:08:54,500 --> 00:09:02,780
+Guest Management, on the NEWEAST Intranet. Ask. Approve. Prepare. Welcome.
