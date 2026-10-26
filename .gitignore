@@ -1,5 +1,3 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
 # dependencies
 /node_modules
 /.pnp
@@ -16,6 +14,7 @@
 # next.js
 /.next/
 /out/
+next-env.d.ts
 
 # production
 /build
@@ -23,6 +22,7 @@
 # misc
 .DS_Store
 *.pem
+*.tsbuildinfo
 
 # debug
 npm-debug.log*
@@ -30,12 +30,28 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
+# secrets and local environment
+.env
+.env.*
+!.env.example
+
+# local databases and runtime media (do not publish guest photos or live data)
+*.db
+*.db-journal
+/prisma/dev.db
+/prisma/dev.db-journal
+/data
+/public/uploads
+
+# agent / editor scratch
+.clinerules
+/memory-bank
+.cursor
+.vscode
+.idea
+
+# duplicate local copies
+/Guest-Management.pptx
 
 # vercel
 .vercel
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts

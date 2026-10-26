@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NEWEAST Guest Management — a short guide</title>
+  <style>
+    :root {
+      --ink: #2a2424;
+      --muted: #6f6565;
+      --faint: #9a8f8f;
+      --line: #eadfdf;
+      --paper: #fffcfb;
+      --wash: #f4efec;
+      --brand: #b51e21;
+      --sage: #e7f2ec;
+      --sand: #f8f1e6;
+    }
+
+    @page {
+      size: A4;
+      margin: 16mm 16mm 18mm;
+      @bottom-center {
+        content: counter(page);
+        font-family: "Liberation Sans", "DejaVu Sans", sans-serif;
+        font-size: 9pt;
+        color: #9a8f8f;
+      }
+    }
+
+    * { box-sizing: border-box; }
+
+    html {
+      background: var(--wash);
+      color: var(--ink);
+      font-family: "Liberation Sans", "DejaVu Sans", sans-serif;
+      font-size: 15px;
+      line-height: 1.55;
+    }
+
+    body {
+      margin: 0;
+      padding: 32px 16px 64px;
+    }
+
+    article {
+      max-width: 820px;
+      margin: 0 auto;
+      background: var(--paper);
+      padding: 48px 52px 56px;
+      border: 1px solid #f0e6e6;
+      border-radius: 18px;
+    }
+
+    .downloads {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 0 0 28px;
+    }
+
+    .downloads a {
+      display: inline-flex;
+      align-items: center;
+      height: 34px;
+      padding: 0 14px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .downloads a.primary {
+      border-color: var(--brand);
+      background: var(--brand);
+      color: #fff;
+    }
+
+    .kicker {
+      margin: 0;
+      color: var(--brand);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 8px 0 0;
+      font-family: "Liberation Serif", "DejaVu Serif", serif;
+      font-size: 40px;
+      font-weight: 500;
+      letter-spacing: -0.03em;
+      line-height: 1.1;
+    }
+
+    .lede {
+      max-width: 38em;
+      margin: 14px 0 0;
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    h2 {
+      margin: 0 0 8px;
+      font-family: "Liberation Serif", "DejaVu Serif", serif;
+      font-size: 26px;
+      font-weight: 500;
+      letter-spacing: -0.02em;
+    }
+
+    h2 .num {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--brand);
+      font-family: "Liberation Sans", "DejaVu Sans", sans-serif;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+
+    p { margin: 0 0 12px; }
+
+    a { color: var(--brand); text-decoration: none; }
+
+    ol.steps {
+      margin: 0 0 16px;
+      padding: 0;
+      list-style: none;
+    }
+
+    ol.steps li {
+      position: relative;
+      margin: 0 0 8px;
+      padding-left: 28px;
+    }
+
+    ol.steps li::before {
+      content: counter(step);
+      counter-increment: step;
+      position: absolute;
+      left: 0;
+      top: 2px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #f8ecec;
+      color: var(--brand);
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 18px;
+      text-align: center;
+    }
+
+    ol.steps { counter-reset: step; }
+
+    .desks {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin: 28px 0 0;
+    }
+
+    .desk {
+      padding: 14px 16px 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+    }
+
+    .desk strong {
+      display: block;
+      font-size: 14px;
+    }
+
+    .desk span {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .desk:last-child { grid-column: 1 / -1; }
+
+    section {
+      margin-top: 36px;
+    }
+
+    figure {
+      margin: 16px 0 4px;
+    }
+
+    figure img {
+      display: block;
+      width: 100%;
+      height: auto;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+    }
+
+    figcaption {
+      margin-top: 8px;
+      color: var(--faint);
+      font-size: 12px;
+    }
+
+    .note {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: var(--sage);
+      color: #244238;
+      font-size: 14px;
+    }
+
+    .sand {
+      background: var(--sand);
+      color: #4a3d2a;
+    }
+
+    footer.colophon {
+      margin-top: 36px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+      color: var(--faint);
+      font-size: 12px;
+    }
+
+    @media print {
+      html, body { background: white; }
+      body { padding: 0; }
+      article {
+        max-width: none;
+        margin: 0;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+      }
+      section.chapter { break-before: page; }
+      figure, .desk, .note { break-inside: avoid; }
+      h2 { break-after: avoid; }
+      a { color: inherit; }
+      .downloads { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <article>
+    <p class="downloads">
+      <a class="primary" href="Guest-Management.pptx" download="NEWEAST-Guest-Management-Guide.pptx">Download PowerPoint</a>
+      <a href="NEWEAST-Guest-Management-Guide.pdf" download>Download PDF</a>
+      <a href="NEWEAST-Guest-Management-Walkthrough.mp4">Watch the walkthrough</a>
+      <a href="index.html">Open in the browser</a>
+    </p>
+    <p class="kicker">NEWEAST Intranet module</p>
+    <h1>Guest Management</h1>
+    <p class="lede">A step-by-step process for every department. Sign in, and you only see the desk that belongs to your role.</p>
+
+    <div class="desks">
+      <div class="desk"><strong>Employees</strong><span>Ask for a visit.</span></div>
+      <div class="desk"><strong>Managers</strong><span>Approve your team, or ask for your own.</span></div>
+      <div class="desk"><strong>Reception</strong><span>Prepare the visit and the room.</span></div>
+      <div class="desk"><strong>Reporting and control</strong><span>Read the numbers, the list, and escalations.</span></div>
+      <div class="desk"><strong>Guard</strong><span>The gate, who is inside, and walk-ins.</span></div>
+    </div>
+
+    <section class="chapter">
+      <h2><span class="num">Start</span>Sign in</h2>
+      <p>Open <a href="https://guest.neweast.cloud">guest.neweast.cloud</a> and use your NEWEAST email and password.</p>
+      <figure>
+        <img src="images/sign-in.png" alt="Sign in screen with email, password, and a Sign in button" />
+        <figcaption>The sign-in screen.</figcaption>
+      </figure>
+    </section>
+
+    <section class="chapter">
+      <h2><span class="num">Employees</span>Ask for a visit</h2>
+      <p>Your page is Visit request. Fill it the same way you would fill the guest email.</p>
+      <ol class="steps">
+        <li>Choose the date, arrival time, department, and guest type.</li>
+        <li>Write why they are coming.</li>
+        <li>Say whether a driver is needed.</li>
+        <li>Add each guest: name, mobile, email, company, job title, nationality. Use Add guest for another person.</li>
+        <li>Submit request.</li>
+      </ol>
+      <figure>
+        <img src="images/employee-request.png" alt="Visit request form for an employee" />
+        <figcaption>The employee form. The line under the guests names the person who approves it.</figcaption>
+      </figure>
+      <p>If you have a line manager, the request goes to them first. If you do not, it goes straight to Reception. Your own requests stay on this page. Open one to see the guests and where it stands.</p>
+      <figure>
+        <img src="images/request-detail.png" alt="Opened visit request showing date, purpose, and guest" />
+        <figcaption>An opened request. Status sits at the top right.</figcaption>
+      </figure>
+      <p class="note">When Reception confirms the visit, you receive an email and a Teams message with the date, time, room, and guest names.</p>
+    </section>
+
+    <section class="chapter">
+      <h2><span class="num">Managers</span>Approve, or send your own</h2>
+      <p>Your page is titled Approvals. The form is the same as the employee form, so you can request a room for yourself. That request goes to your own line manager.</p>
+      <p>When someone on your team is waiting, their card appears at the top under <strong>Waiting for your approval</strong>. Open it.</p>
+      <ol class="steps">
+        <li>Read the date, department, purpose, and each guest.</li>
+        <li>Add a comment if you want one. It is optional.</li>
+        <li>Approve sends the request to Reception. Decline closes it.</li>
+      </ol>
+      <p class="note">The employee is told either way, by email and by Teams. Your comment is included.</p>
+    </section>
+
+    <section class="chapter">
+      <h2><span class="num">Reception</span>Visit requests</h2>
+      <p>This desk holds staff requests and mail sent to guest@neweast.co. Newest first. Open a card to work on it.</p>
+      <figure>
+        <img src="images/intake.png" alt="Visit requests queue with staff requests, room replies, and the email template" />
+        <figcaption>Visit requests. Room replies show Reply done once the confirmation has gone out.</figcaption>
+      </figure>
+      <p>On the right is the email template, if a guest prefers to write in. Copy it, or download the Excel file. The mailbox also syncs on its own.</p>
+      <figure>
+        <img src="images/intake-detail.png" alt="A visit request open for Reception, with schedule and room still to choose" />
+        <figcaption>An open request. Choose the room, correct anything missing, then use the buttons at the bottom.</figcaption>
+      </figure>
+      <ol class="steps">
+        <li><strong>Save</strong> keeps your edits.</li>
+        <li><strong>Confirm</strong> books the room in Outlook and tells the employee the visit is set.</li>
+        <li><strong>Submit to Security</strong> when the guard should expect them.</li>
+        <li><strong>Escalation</strong> sends a customer request to Samir first. It comes back here after approval.</li>
+      </ol>
+      <p class="note sand">After the room accepts, guest@neweast.co replies to the original email with the date, the room, and the guests. The request then shows Notes · Reply done.</p>
+    </section>
+
+    <section class="chapter">
+      <h2><span class="num">Reception</span>Meeting rooms</h2>
+      <p>Green is free. Click a green slot and the booking card fills in. Check the room and the time, then Book in Outlook. Red is already taken. A red slot we booked shows the visit when you hover it. Grey slots are in the past.</p>
+      <figure>
+        <img src="images/rooms.png" alt="Meeting room board with free green slots, busy red slots, and a booking card" />
+        <figcaption>The room board for the day. Use Previous and Next to move the date.</figcaption>
+      </figure>
+    </section>
+
+    <section class="chapter">
+      <h2><span class="num">Reporting and control</span>Look, don’t chase</h2>
+      <p>Reports shows how visits are spread: planned and walk-in, busy hours, departments, and guest types. Export CSV when you need the numbers outside the system.</p>
+      <figure>
+        <img src="images/reports.png" alt="Reports page with visit mix, peak hours, and departments" />
+        <figcaption>Reports. The same desk also has Visits and Escalations in the sidebar.</figcaption>
+      </figure>
+      <p><strong>Visits</strong> is the full list, with filters. <strong>Escalations</strong> is where a customer email waits for a decision before Reception continues.</p>
+    </section>
+
+    <section class="chapter">
+      <h2><span class="num">Guard</span>The desk</h2>
+      <p>Scan the invitation QR, or paste the invitation link. Choose Check-in or Check-out first. The row of queues is today’s traffic: expected, arriving soon, waiting at the gate, inside, and checked out.</p>
+      <figure>
+        <img src="images/security.png" alt="Security desk with QR check-in and today's queues" />
+        <figcaption>The gate. Allow the camera, or paste the link if the camera is blocked.</figcaption>
+      </figure>
+      <p><strong>Inside now</strong> is who is still in the building. Use it for a headcount.</p>
+    </section>
+
+    <section class="chapter">
+      <h2><span class="num">Guard</span>Walk-in</h2>
+      <p>Someone at the door without an appointment is a walk-in. Name the host, the purpose, and the visitor. The visit needs approval before check-in.</p>
+      <figure>
+        <img src="images/walk-in.png" alt="Walk-in form with host, purpose, and visitor fields" />
+        <figcaption>Walk-in registration.</figcaption>
+      </figure>
+    </section>
+
+    <footer class="colophon">
+      NEWEAST Guest Management · Headquarters · guest.neweast.cloud
+    </footer>
+  </article>
+</body>
+</html>
