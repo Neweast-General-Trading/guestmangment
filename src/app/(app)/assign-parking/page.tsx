@@ -13,7 +13,7 @@ export default async function AssignParkingPage({
 }) {
   const session = await requireSession();
   if (!session) return null;
-  if (!canAssignStaffParking(session.role)) redirect("/dashboard");
+  if (!canAssignStaffParking(session.role, session.email)) redirect("/dashboard");
   const query = await searchParams;
   const [staff, assignments] = await Promise.all([listParkingStaff(), listParkingAssignments()]);
 

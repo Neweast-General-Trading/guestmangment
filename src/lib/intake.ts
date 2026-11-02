@@ -9,10 +9,11 @@ import { upsertVisitor, visitInclude } from "./visits";
 import { visitTypeFromKind } from "./email-template";
 import { extractGuestRequest } from "./extract-visit";
 import type { ParsedGuestRequest } from "./email-template";
-import { GUEST_KIND_LABEL, type GuestKind } from "./constants";
+import { GUEST_KIND_LABEL, type GuestKind, type TourType } from "./constants";
 import { canManageIntake, canDecideEscalation, type SessionUser } from "./permissions";
 import { syncOutlookRoom } from "./room-booking";
 import { isDeskSource, notifyStaffVisitConfirmed } from "./staff-request";
+import { applyTourType, briefVisitStakeholders, syncSupplierApproval, visitBlocksConfirm } from "./tours";
 
 const HIDDEN_HOST = "olga@neweast.co";
 const ADMIN_EMAIL = "adminsatror@neweast.co";
@@ -206,6 +207,7 @@ export async function updateIntakeVisit(
       jobTitle?: string;
       nationality?: string;
     }[];
+    tourType?: TourType;
   },
 ) {
   if (!canManageIntake(actor.role)) throw new Error("Only Administration can edit email intake.");
@@ -257,6 +259,8 @@ export async function updateIntakeVisit(
     },
   });
   await addTimeline({ visitId, event: "Intake updated", userId: actor.id });
+  if (input.tourType) await applyTourType(visitId, input.tourType);
+  await syncSupplierApproval(visitId);
   if (input.meetingRoom?.trim()) {
     await syncOutlookRoom(visitId, input.meetingRoom);
   }
@@ -276,8 +280,8 @@ export async function confirmIntake(
   const visit = await prisma.visit.findUniqueOrThrow({ where: { id: visitId } });
   if (visit.status !== "INTAKE") throw new Error("Confirm is only available on new email requests.");
   if (!input.meetingRoom.trim()) throw new Error("Choose a meeting room before confirming.");
-  if (visit.driverRequired && visit.driverStatus !== "DONE" && !input.driverName?.trim()) {
-    throw new Error("Contact the driver and mark Done, or enter the driver name.");
+  if (visit.driverRequired && visit.driverStatus !== "DONE") {
+    throw new Error("Sachini confirms the driver before this visit can be confirmed.");
   }
   await prisma.visit.update({
     where: { id: visitId },
@@ -297,7 +301,11 @@ export async function confirmIntake(
       : input.meetingRoom.trim(),
     userId: actor.id,
   });
-  await notifyStaffVisitConfirmed(visitId).catch(() => undefined);
+  const ready = await prisma.visit.findUnique({ where: { id: visitId } });
+  if (ready && !visitBlocksConfirm(ready)) {
+    await notifyStaffVisitConfirmed(visitId).catch(() => undefined);
+    await briefVisitStakeholders(visitId).catch(() => undefined);
+  }
 }
 
 export async function escalateIntake(actor: SessionUser, visitId: string, notes?: string) {
@@ -386,12 +394,15 @@ export async function submitIntake(actor: SessionUser, visitId: string) {
   });
   if (!isDeskSource(visit.source)) throw new Error("This is not an intake request.");
   if (visit.status !== "INTAKE") throw new Error("Submit is only available after preparation.");
+  if (visitBlocksConfirm(visit)) {
+    throw new Error("Wait for Salma Moufallah to approve the building tour.");
+  }
   if (!visit.meetingRoom) throw new Error("Confirm a meeting room before submitting.");
-  if (visit.driverRequired && visit.driverStatus !== "DONE" && !visit.driverName) {
-    throw new Error("Contact the driver and mark Done, or add driver details.");
+  if (visit.driverRequired && visit.driverStatus !== "DONE") {
+    throw new Error("Sachini confirms the driver before this visit can be submitted.");
   }
   if (visit.gatePassRequired && visit.gatePassStatus !== "DONE") {
-    throw new Error("Wait for HR to prepare the gate pass, then mark it Done.");
+    throw new Error("Wait for Reception to approve the gate pass and upload it.");
   }
   if (!visit.visitors.length) throw new Error("Add at least one visitor before submitting.");
   assertFutureVisit(todayStamp(visit.expectedArrival), timeStamp(visit.expectedArrival));

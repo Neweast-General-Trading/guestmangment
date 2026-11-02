@@ -1,14 +1,17 @@
 import { addTimeline, writeAudit } from "./audit";
 import { startArrangements } from "./arrangements";
-import { GUEST_KIND_LABEL, type GuestKind } from "./constants";
+import { type GuestKind, type TourType } from "./constants";
 import { visitTypeFromKind } from "./email-template";
+import { isGuestBookableRoom, roomsWithAvailability } from "./graph";
 import { fmtDate, fmtTime } from "./format";
 import { makeQrToken, nextVisitCode } from "./ids";
 import { notify, notifyRoles } from "./notify";
 import { canUseRequestDesk } from "./access";
-import type { SessionUser } from "./permissions";
+import { canManageIntake, type SessionUser } from "./permissions";
+import { bookStaffRoomHold, parseRoomInvitees, syncOutlookRoom } from "./room-booking";
 import { prisma } from "./prisma";
 import { assertFutureVisit, combineVisitDateTime } from "./visit-schedule";
+import { applyTourType } from "./tours";
 import { upsertVisitor } from "./visits";
 
 const HIDDEN_HOST = "olga@neweast.co";
@@ -33,10 +36,27 @@ export type StaffRequestInput = {
   giftType: string | null;
   gatePassRequired: boolean;
   visitors: StaffVisitorInput[];
+  tourType?: TourType;
+  meetingRoom?: string;
+  inviteEmails?: string[];
 };
 
 export function isDeskSource(source: string) {
   return source === "EMAIL" || source === "STAFF";
+}
+
+function optionalRoom(value?: string | null) {
+  const room = (value || "").trim();
+  if (!room || /^n\/?a$/i.test(room)) return "";
+  return room;
+}
+
+async function assertRoomFree(room: string, start: Date, end: Date) {
+  if (!room) return;
+  if (!isGuestBookableRoom(room)) throw new Error("Choose a ground-floor city room.");
+  const availability = await roomsWithAvailability(start, end).catch(() => []);
+  const proposed = availability.find((item) => item.name.toLowerCase() === room.toLowerCase());
+  if (proposed && !proposed.available) throw new Error("That room is already booked. Choose a free room.");
 }
 
 async function lineManagerFor(actor: SessionUser) {
@@ -65,23 +85,25 @@ export async function createStaffRequest(actor: SessionUser, input: StaffRequest
   if (actor.email.toLowerCase() === HIDDEN_HOST) throw new Error("This account cannot request a visit.");
   const visitorsIn = input.visitors.map((visitor) => ({ ...visitor, fullName: visitor.fullName.trim() })).filter((visitor) => visitor.fullName);
   if (!visitorsIn.length) throw new Error("Add at least one guest.");
-  if (visitorsIn.some((visitor) => !visitor.mobile.trim())) throw new Error("Mobile is required for each guest.");
-  if (visitorsIn.some((visitor) => !visitor.email.trim() || !visitor.email.includes("@"))) {
-    throw new Error("Email is required for each guest.");
+  if (visitorsIn.some((visitor) => visitor.email.trim() && !visitor.email.includes("@"))) {
+    throw new Error("Guest email is not valid.");
   }
   if (!input.purpose.trim()) throw new Error("Purpose is required.");
   if (!input.departmentId) throw new Error("Choose a department.");
+  const proposedRoom = optionalRoom(input.meetingRoom);
   if (input.giftRequired && !input.giftType?.trim()) throw new Error("Choose a gift type.");
   assertFutureVisit(input.visitDate, input.arrivalTime);
+  const start = combineVisitDateTime(input.visitDate, input.arrivalTime);
+  const end = new Date(start.getTime() + 60 * 60 * 1000);
+  await assertRoomFree(proposedRoom, start, end);
 
   const department = await prisma.department.findUnique({ where: { id: input.departmentId } });
   if (!department) throw new Error("Choose a department.");
-  const manager = await lineManagerFor(actor);
   const visitors = await Promise.all(
     visitorsIn.map((visitor, index) =>
       upsertVisitor({
         fullName: visitor.fullName,
-        mobile: visitor.mobile.replace(/\s+/g, "") || `inbox:staff-${actor.id}-${index}-${visitor.fullName}`,
+        mobile: visitor.mobile.replace(/\s+/g, ""),
         email: visitor.email,
         company: visitor.company,
         jobTitle: visitor.jobTitle,
@@ -95,7 +117,7 @@ export async function createStaffRequest(actor: SessionUser, input: StaffRequest
     data: {
       visitCode: await nextVisitCode(),
       type: visitTypeFromKind(input.guestKind),
-      status: manager ? "MANAGER_REVIEW" : "INTAKE",
+      status: "INTAKE",
       purpose: input.purpose.trim(),
       visitDate: new Date(`${input.visitDate}T00:00:00`),
       expectedArrival: combineVisitDateTime(input.visitDate, input.arrivalTime),
@@ -106,14 +128,17 @@ export async function createStaffRequest(actor: SessionUser, input: StaffRequest
       accessArea: "General Offices",
       qrToken: makeQrToken(),
       createdById: actor.id,
-      lineManagerId: manager?.id || null,
+      lineManagerId: null,
       source: "STAFF",
       guestKind: input.guestKind,
+      meetingRoom: proposedRoom || null,
       driverRequired: input.driverRequired,
       pickupRequired: input.driverRequired,
       giftRequired: input.giftRequired,
       giftType: input.giftRequired ? input.giftType?.trim() || null : null,
       gatePassRequired: input.gatePassRequired,
+      tourType: input.tourType || "NONE",
+      colleagueInvitees: JSON.stringify(parseRoomInvitees(input.inviteEmails || [], actor.email)),
       visitors: {
         create: visitors.map((visitor, index) => ({
           visitorId: visitor.id,
@@ -122,11 +147,11 @@ export async function createStaffRequest(actor: SessionUser, input: StaffRequest
       },
     },
   });
+  await applyTourType(visit.id, input.tourType || "NONE");
 
   await addTimeline({
     visitId: visit.id,
-    event: manager ? "Sent to line manager" : "Sent to Administration",
-    note: manager ? manager.name : "No line manager on file",
+    event: "Sent to reception",
     userId: actor.id,
   });
   await writeAudit({
@@ -134,41 +159,111 @@ export async function createStaffRequest(actor: SessionUser, input: StaffRequest
     visitId: visit.id,
     action: "Staff visit requested",
     module: "Staff request",
-    newValue: { visitCode: visit.visitCode, manager: manager?.name || null },
+    newValue: { visitCode: visit.visitCode },
   });
 
   const guest = visitorsIn[0]?.fullName || "a guest";
-  if (manager) {
-    await notify({
-      userId: manager.id,
-      visitId: visit.id,
-      type: "LINE_APPROVAL",
-      title: "Visit request to approve",
-      message: [
-        `${actor.name} asked you to approve a visit.`,
-        `${visit.visitCode} · ${guest} · ${GUEST_KIND_LABEL[input.guestKind]}`,
-        `${input.visitDate} ${input.arrivalTime} · ${department.name}`,
-        `Purpose: ${input.purpose.trim()}`,
-        input.driverRequired ? "Driver and car requested." : "",
-        input.giftRequired ? `Gift: ${input.giftType}` : "",
-        input.gatePassRequired ? "Gate pass requested." : "",
-      ]
-        .filter(Boolean)
-        .join("\n"),
-      onBehalfOf: manager.name,
-    });
-  } else {
-    await startArrangements(visit.id);
-    await notifyReceptionIntake({
-      visitId: visit.id,
-      visitCode: visit.visitCode,
-      guest,
-      requesterName: actor.name,
-      purpose: input.purpose.trim(),
-    });
-  }
+  await startArrangements(visit.id);
+  await notifyReceptionIntake({
+    visitId: visit.id,
+    visitCode: visit.visitCode,
+    guest,
+    requesterName: actor.name,
+    purpose: input.purpose.trim(),
+    room: proposedRoom || "N/A",
+  });
 
-  return { visit, managerName: manager?.name || null };
+  return { visit, managerName: null as string | null };
+}
+
+const EDITABLE_REQUEST = new Set(["INTAKE", "EXPECTED", "APPROVED", "INVITATION_SENT", "PENDING_APPROVAL", "MANAGER_REVIEW"]);
+
+export function canEditStaffRequest(
+  actor: SessionUser,
+  visit: { status: string; createdById: string },
+) {
+  if (!EDITABLE_REQUEST.has(visit.status)) return false;
+  return actor.id === visit.createdById || canManageIntake(actor.role);
+}
+
+export async function updateStaffRequest(actor: SessionUser, visitId: string, input: StaffRequestInput) {
+  const current = await prisma.visit.findUnique({
+    where: { id: visitId },
+    include: { createdBy: { select: { id: true, name: true } } },
+  });
+  if (!current || current.source !== "STAFF") throw new Error("Visit request was not found.");
+  if (!canEditStaffRequest(actor, current)) throw new Error("This request can no longer be edited.");
+  const visitorsIn = input.visitors.map((visitor) => ({ ...visitor, fullName: visitor.fullName.trim() })).filter((visitor) => visitor.fullName);
+  if (!visitorsIn.length) throw new Error("Add at least one guest.");
+  if (visitorsIn.some((visitor) => visitor.email.trim() && !visitor.email.includes("@"))) {
+    throw new Error("Guest email is not valid.");
+  }
+  if (!input.purpose.trim()) throw new Error("Purpose is required.");
+  if (!input.departmentId) throw new Error("Choose a department.");
+  const proposedRoom = optionalRoom(input.meetingRoom);
+  if (input.giftRequired && !input.giftType?.trim()) throw new Error("Choose a gift type.");
+  const start = combineVisitDateTime(input.visitDate, input.arrivalTime);
+  const sameSlot =
+    (current.meetingRoom || "").toLowerCase() === proposedRoom.toLowerCase() &&
+    Math.abs(current.expectedArrival.getTime() - start.getTime()) < 60_000;
+  if (!sameSlot) {
+    assertFutureVisit(input.visitDate, input.arrivalTime);
+    const end = new Date(start.getTime() + 60 * 60 * 1000);
+    await assertRoomFree(proposedRoom, start, end);
+  }
+  const department = await prisma.department.findUnique({ where: { id: input.departmentId } });
+  if (!department) throw new Error("Choose a department.");
+  const visitors = await Promise.all(
+    visitorsIn.map((visitor) =>
+      upsertVisitor({
+        fullName: visitor.fullName,
+        mobile: visitor.mobile.replace(/\s+/g, ""),
+        email: visitor.email,
+        company: visitor.company,
+        jobTitle: visitor.jobTitle,
+        nationality: visitor.nationality,
+        visitorType: input.guestKind,
+      }),
+    ),
+  );
+  await prisma.visitVisitor.deleteMany({ where: { visitId } });
+  await prisma.visit.update({
+    where: { id: visitId },
+    data: {
+      type: visitTypeFromKind(input.guestKind),
+      status: current.status === "MANAGER_REVIEW" ? "INTAKE" : current.status,
+      purpose: input.purpose.trim(),
+      visitDate: new Date(`${input.visitDate}T00:00:00`),
+      expectedArrival: start,
+      departmentId: department.id,
+      visitorCount: visitors.length,
+      vip: input.guestKind === "VIP",
+      guestKind: input.guestKind,
+      meetingRoom: proposedRoom || null,
+      driverRequired: input.driverRequired,
+      pickupRequired: input.driverRequired,
+      giftRequired: input.giftRequired,
+      giftType: input.giftRequired ? input.giftType?.trim() || null : null,
+      gatePassRequired: input.gatePassRequired,
+      tourType: input.tourType || "NONE",
+      colleagueInvitees: JSON.stringify(parseRoomInvitees(input.inviteEmails || [], current.createdById === actor.id ? actor.email : "")),
+      visitors: {
+        create: visitors.map((visitor, index) => ({ visitorId: visitor.id, isPrimary: index === 0 })),
+      },
+    },
+  });
+  await applyTourType(visitId, input.tourType || "NONE");
+  if (current.outlookEventId) await syncOutlookRoom(visitId, proposedRoom);
+  await startArrangements(visitId);
+  await addTimeline({ visitId, event: "Request updated", note: actor.name, userId: actor.id });
+  await writeAudit({
+    userId: actor.id,
+    visitId,
+    action: "Staff visit updated",
+    module: "Staff request",
+    newValue: { visitCode: current.visitCode, room: proposedRoom },
+  });
+  return current;
 }
 
 export async function decideStaffRequest(
@@ -230,6 +325,7 @@ export async function decideStaffRequest(
     requesterName: visit.createdBy.name,
     purpose: visit.purpose,
     approvedBy: actor.name,
+    room: visit.meetingRoom || "",
   });
   await startArrangements(visitId);
 }
@@ -241,6 +337,7 @@ async function notifyReceptionIntake(input: {
   requesterName: string;
   purpose: string;
   approvedBy?: string;
+  room?: string;
 }) {
   await notifyRoles(["HR_ADMIN"], {
     visitId: input.visitId,
@@ -248,14 +345,105 @@ async function notifyReceptionIntake(input: {
     title: "Visit ready for reception",
     message: [
       `${input.visitCode} needs a meeting room and intake.`,
-      input.approvedBy ? `Approved by ${input.approvedBy}.` : "No line manager on file — sent to Administration.",
+      input.approvedBy ? `Approved by ${input.approvedBy}.` : "Sent straight to reception.",
       `Requester: ${input.requesterName}`,
       `Guest: ${input.guest}`,
+      input.room ? `Proposed room: ${input.room}` : "",
       `Purpose: ${input.purpose}`,
     ]
       .filter(Boolean)
       .join("\n"),
   });
+}
+
+export async function createReceptionDeskVisit(
+  actor: SessionUser,
+  input: StaffRequestInput & { roomName: string; endTime: string; inviteEmails?: string[] },
+) {
+  if (!canManageIntake(actor.role)) throw new Error("Only reception can book a visitor immediately.");
+  const visitorsIn = input.visitors.map((visitor) => ({ ...visitor, fullName: visitor.fullName.trim() })).filter((visitor) => visitor.fullName);
+  if (!visitorsIn.length) throw new Error("Add at least one guest.");
+  if (visitorsIn.some((visitor) => visitor.email.trim() && !visitor.email.includes("@"))) {
+    throw new Error("Guest email is not valid.");
+  }
+  if (!input.purpose.trim()) throw new Error("Purpose is required.");
+  if (!input.departmentId) throw new Error("Choose a department.");
+  if (!input.roomName.trim()) throw new Error("Choose a room.");
+  assertFutureVisit(input.visitDate, input.arrivalTime);
+  const department = await prisma.department.findUnique({ where: { id: input.departmentId } });
+  if (!department) throw new Error("Choose a department.");
+  const visitors = await Promise.all(
+    visitorsIn.map((visitor) =>
+      upsertVisitor({
+        fullName: visitor.fullName,
+        mobile: visitor.mobile.replace(/\s+/g, ""),
+        email: visitor.email,
+        company: visitor.company,
+        jobTitle: visitor.jobTitle,
+        nationality: visitor.nationality,
+        visitorType: input.guestKind,
+      }),
+    ),
+  );
+  const start = combineVisitDateTime(input.visitDate, input.arrivalTime);
+  const end = combineVisitDateTime(input.visitDate, input.endTime || "");
+  if (!input.endTime || end <= start) throw new Error("End time must be after the start time.");
+  const visit = await prisma.visit.create({
+    data: {
+      visitCode: await nextVisitCode(),
+      type: visitTypeFromKind(input.guestKind),
+      status: "INTAKE",
+      purpose: input.purpose.trim(),
+      visitDate: new Date(`${input.visitDate}T00:00:00`),
+      expectedArrival: start,
+      expectedDeparture: end,
+      hostId: actor.id,
+      departmentId: department.id,
+      visitorCount: visitors.length,
+      vip: input.guestKind === "VIP",
+      accessArea: "General Offices",
+      qrToken: makeQrToken(),
+      createdById: actor.id,
+      source: "ADMIN",
+      guestKind: input.guestKind,
+      meetingRoom: input.roomName.trim(),
+      driverRequired: input.driverRequired,
+      pickupRequired: input.driverRequired,
+      giftRequired: input.giftRequired,
+      giftType: input.giftRequired ? input.giftType?.trim() || null : null,
+      gatePassRequired: input.gatePassRequired,
+      tourType: input.tourType || "NONE",
+      visitors: {
+        create: visitors.map((visitor, index) => ({
+          visitorId: visitor.id,
+          isPrimary: index === 0,
+        })),
+      },
+    },
+  });
+  await applyTourType(visit.id, input.tourType || "NONE");
+  await addTimeline({ visitId: visit.id, event: "Reception visitor booked", note: "No approval — booked at the desk", userId: actor.id });
+  await writeAudit({
+    userId: actor.id,
+    visitId: visit.id,
+    action: "Reception visitor booked",
+    module: "Rooms",
+    newValue: { visitCode: visit.visitCode, room: input.roomName },
+  });
+  await startArrangements(visit.id);
+  await bookStaffRoomHold(actor, {
+    visitId: visit.id,
+    roomName: input.roomName.trim(),
+    start,
+    end,
+    subject: `${visit.visitCode} · Guest visit · ${input.roomName.trim()}`,
+    description: input.purpose.trim(),
+    inviteEmails: input.inviteEmails,
+    purpose: input.purpose.trim(),
+    guestMobile: visitorsIn[0].mobile,
+    guestEmail: visitorsIn[0].email,
+  });
+  return visit;
 }
 
 export async function notifyStaffVisitConfirmed(visitId: string) {

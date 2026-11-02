@@ -2,15 +2,22 @@
 
 import { useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
-import { bookRoomTrialAction, cancelRoomTrialAction } from "@/app/actions";
+import { bookReceptionVisitAction, bookRoomTrialAction, cancelRoomTrialAction } from "@/app/actions";
+import { FormBusy } from "@/components/form-busy";
+import { InvitePeople } from "@/components/invite-people";
+import { SearchSelect } from "@/components/search-select";
+import { TourField } from "@/components/tour-field";
+import { GuestDocFields } from "@/components/guest-doc-fields";
 import { Button, Card, Field, TextInput, Textarea, inputClass } from "@/components/ui";
-import { isDummyMail, sameRoom, type GuestDayEvent, type RoomDayRow, type RoomReply, type RoomSlot, type SlotBooking } from "@/lib/graph";
-import { matches } from "@/lib/paging";
+import { GIFT_TYPES } from "@/lib/arrangement-types";
+import { isDummyMail, roomKey, sameRoom, type GuestDayEvent, type RoomDayRow, type RoomReply, type RoomSlot, type SlotBooking } from "@/lib/graph";
+import type { RoomDeskVisit } from "@/lib/room-booking";
 
 const FREE = "bg-[#8ec9a4] hover:bg-[#7bbc93]";
 const BUSY = "bg-[#d9766c]";
 const PAST = "bg-[#d7d2d2]";
 const PICKED = "bg-[#5fa87a] ring-2 ring-[#2f6b45]";
+const EMPTY_GUEST = { fullName: "", mobile: "", email: "", company: "", jobTitle: "", nationality: "" };
 
 function dubaiToday() {
   return new Intl.DateTimeFormat("en-CA", {
@@ -71,6 +78,9 @@ export function RoomsBoard({
   mailbox,
   bookerEmail,
   people,
+  deskVisits,
+  departments,
+  manage = true,
 }: {
   date: string;
   rooms: RoomDayRow[];
@@ -78,6 +88,9 @@ export function RoomsBoard({
   mailbox: string;
   bookerEmail: string;
   people: { value: string; label: string; hint?: string }[];
+  deskVisits: RoomDeskVisit[];
+  departments: { id: string; name: string }[];
+  manage?: boolean;
 }) {
   const cache = useRef(new Map<string, { rooms: RoomDayRow[]; events: GuestDayEvent[] }>([
     [initialDate, { rooms: initialRooms, events: initialEvents }],
@@ -89,15 +102,41 @@ export function RoomsBoard({
   const [room, setRoom] = useState(initialRooms[0]?.name || "");
   const [start, setStart] = useState("10:00");
   const [end, setEnd] = useState("11:00");
-  const [subject, setSubject] = useState(initialRooms[0]?.name ? `Guest visit · ${initialRooms[0].name}` : "Guest visit");
-  const [description, setDescription] = useState("");
   const shownEvents = events
     .filter((event) => !isDummyMail(event.subject))
     .slice()
     .sort((a, b) => b.start.localeCompare(a.start) || b.end.localeCompare(a.end));
   const [tip, setTip] = useState<{ x: number; y: number; booking: SlotBooking; room: string } | null>(null);
-
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [visitorOpen, setVisitorOpen] = useState(false);
+  const [guestMobile, setGuestMobile] = useState("");
+  const [guestEmail, setGuestEmail] = useState("");
+  const [purpose, setPurpose] = useState("");
+  const [cancelId, setCancelId] = useState<string | null>(null);
+  const selected = deskVisits.find((item) => item.id === selectedId) || null;
   const hours = rooms[0]?.slots || [];
+
+  function openRequest(visit: RoomDeskVisit) {
+    setSelectedId(visit.id);
+    setVisitorOpen(false);
+    setGuestMobile(visit.guests[0]?.mobile || "");
+    setGuestEmail(visit.guests[0]?.email || "");
+    setPurpose(visit.purpose || "");
+    setStart(visit.arrival || "10:00");
+    setEnd(addMinutes(visit.arrival || "10:00", 60));
+    if (visit.proposedRoom) setRoom(visit.proposedRoom);
+    if (visit.visitDate) void go(visit.visitDate);
+  }
+
+  function openVisitor(name?: string, time?: string) {
+    setSelectedId(null);
+    setVisitorOpen(true);
+    if (name) setRoom(name);
+    if (time) {
+      setStart(time);
+      setEnd(addMinutes(time, 60));
+    }
+  }
 
   async function go(next: string) {
     if (next === date && cache.current.has(next)) return;
@@ -126,35 +165,45 @@ export function RoomsBoard({
     setRoom(name);
     setStart(time);
     setEnd(addMinutes(time, 60));
-    setSubject(`Guest visit · ${name}`);
+    if (!manage || selected) return;
+    openVisitor(name, time);
   }
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-center gap-2">
-        <button type="button" onClick={() => go(shiftDate(date, -1))} className={navBtn}>
-          Previous
-        </button>
-        <input
-          type="date"
-          value={date}
-          min={dubaiToday()}
-          onChange={(event) => go(event.target.value)}
-          className="h-8 cursor-pointer rounded-md border border-[var(--line)] bg-white px-2 text-[12px]"
-        />
-        <button type="button" onClick={() => go(shiftDate(date, 1))} className={navBtn}>
-          Next
-        </button>
-        {loading ? <span className="text-[12px] text-[var(--muted)]">Updating…</span> : null}
-      </div>
-
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
-        <Card padded={false} className="relative overflow-hidden">
+    <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px] lg:items-start">
+      <div className="min-w-0 space-y-5">
+        <Card padded={false} className="overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-3">
+            <div>
+              <h2 className="text-sm font-semibold">Room availability</h2>
+              <p className="text-[12px] text-[var(--muted)]">Ground-floor city rooms only. Green is free.</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="button" onClick={() => go(shiftDate(date, -1))} className={navBtn}>
+                Previous
+              </button>
+              <input
+                type="date"
+                value={date}
+                min={dubaiToday()}
+                onChange={(event) => go(event.target.value)}
+                className="h-8 cursor-pointer rounded-md border border-[var(--line)] bg-white px-2 text-[12px]"
+              />
+              <button type="button" onClick={() => go(shiftDate(date, 1))} className={navBtn}>
+                Next
+              </button>
+              {manage ? (
+                <button type="button" className={primaryBtn} onClick={() => openVisitor()}>
+                  Visitor Book
+                </button>
+              ) : null}
+            </div>
+          </div>
           <div className={`overflow-x-auto ${loading ? "opacity-60" : ""}`}>
             <table className="min-w-max border-collapse text-[11px]">
               <thead>
                 <tr className="border-b border-[var(--line)] bg-[#faf7f7]">
-                  <th className="sticky left-0 z-10 min-w-48 bg-[#faf7f7] px-3 py-2 text-left font-medium text-[var(--muted)]">
+                  <th className="sticky left-0 z-10 min-w-40 bg-[#faf7f7] px-3 py-2 text-left font-medium text-[var(--muted)]">
                     Room
                   </th>
                   {hours.map((slot) => (
@@ -171,38 +220,29 @@ export function RoomsBoard({
                       <div className="font-medium text-[12px] text-[var(--ink)]">{row.name}</div>
                       <div className="text-[10px] text-[var(--muted)]">
                         {row.capacity ? `${row.capacity} · ` : ""}
-                        {row.floor || "Dubai"}
+                        {row.floor || "Ground floor"}
                       </div>
                     </td>
                     {row.slots.map((slot) => {
                       const past = isPastSlot(date, slot.time);
                       const open = slot.free && !past;
-                      const selected = open && room === row.name && start === slot.time;
+                      const bookable = open && manage;
+                      const marked = bookable && room === row.name && start === slot.time;
                       return (
                         <td key={slot.time} className="p-0.5">
                           <button
                             type="button"
-                            disabled={!open}
-                            onClick={() => open && pick(row.name, slot.time)}
+                            disabled={!bookable}
+                            onClick={() => bookable && pick(row.name, slot.time)}
                             onMouseEnter={(event) => {
                               const booking = oursOnSlot(row, slot, events);
                               if (!booking) return setTip(null);
                               const box = event.currentTarget.getBoundingClientRect();
-                              setTip({
-                                x: box.left + box.width / 2,
-                                y: box.top,
-                                booking,
-                                room: row.name,
-                              });
+                              setTip({ x: box.left + box.width / 2, y: box.top, booking, room: row.name });
                             }}
                             onMouseLeave={() => setTip(null)}
-                            title={past ? `${row.name} ${slot.time} · Past` : open ? `${row.name} ${slot.time} · Free` : undefined}
                             className={`block h-8 w-9 rounded-sm ${
-                              past
-                                ? `${PAST} cursor-default`
-                                : open
-                                  ? `cursor-pointer ${selected ? PICKED : FREE}`
-                                  : `${BUSY} cursor-default`
+                              past ? `${PAST} cursor-default` : bookable ? `cursor-pointer ${marked ? PICKED : FREE}` : open ? `${FREE} cursor-default` : `${BUSY} cursor-default`
                             }`}
                           />
                         </td>
@@ -215,107 +255,191 @@ export function RoomsBoard({
           </div>
           <div className="flex flex-wrap gap-4 border-t border-[var(--line)] px-3 py-2 text-[12px]">
             <span className="inline-flex items-center gap-1.5">
-              <span className="h-3.5 w-3.5 rounded-sm bg-[#8ec9a4]" /> Free — click to set the booking card
+              <span className="h-3.5 w-3.5 rounded-sm bg-[#8ec9a4]" /> Free
             </span>
             <span className="inline-flex items-center gap-1.5">
-              <span className="h-3.5 w-3.5 rounded-sm bg-[#d9766c]" /> Booked — hover for details if booked from here
+              <span className="h-3.5 w-3.5 rounded-sm bg-[#d9766c]" /> Booked
             </span>
             <span className="inline-flex items-center gap-1.5">
-              <span className="h-3.5 w-3.5 rounded-sm bg-[#d7d2d2]" /> Past — cannot book
+              <span className="h-3.5 w-3.5 rounded-sm bg-[#d7d2d2]" /> Past
             </span>
+            {loading ? <span className="text-[var(--muted)]">Updating…</span> : null}
           </div>
         </Card>
 
-        <div className="space-y-4">
-          <Card>
-            <h2 className="text-sm font-semibold">Booking card</h2>
-            <p className="mt-1 text-[12px] text-[var(--muted)]">
-              You ({bookerEmail}) are the Outlook organizer — not {mailbox}. Invite colleagues so the meeting lands on their calendars. When the room accepts, {mailbox} emails everyone on the booking.
-            </p>
-            <form action={bookRoomTrialAction} className="mt-4 space-y-3">
-              <Field label="Room" required>
-                <select name="roomName" value={room} onChange={(event) => setRoom(event.target.value)} className={inputClass} required>
-                  {rooms.map((item) => (
-                    <option key={item.email} value={item.name}>
-                      {item.name}
-                      {item.capacity ? ` · ${item.capacity}` : ""}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Date" required>
-                <TextInput
-                  type="date"
-                  name="date"
-                  value={date}
-                  min={dubaiToday()}
-                  onChange={(event) => event.target.value && go(event.target.value)}
-                  required
-                />
-              </Field>
-              <div className="grid grid-cols-2 gap-2">
-                <Field label="Start" required>
-                  <TextInput type="time" name="start" value={start} onChange={(event) => setStart(event.target.value)} required />
-                </Field>
-                <Field label="End" required>
-                  <TextInput type="time" name="end" value={end} onChange={(event) => setEnd(event.target.value)} required />
-                </Field>
-              </div>
-              <Field label="Subject" required>
-                <TextInput name="subject" value={subject} onChange={(event) => setSubject(event.target.value)} required />
-              </Field>
-              <Field label="Description">
-                <Textarea
-                  name="description"
-                  value={description}
-                  onChange={(event) => setDescription(event.target.value)}
-                  placeholder="Who is meeting, agenda, or anything the room should know"
-                  className="min-h-20"
-                />
-              </Field>
-              <InvitePeople people={people} bookerEmail={bookerEmail} />
-              {isPastSlot(date, start) ? (
-                <p className="text-[12px] font-medium text-[#b14a42]">Past date or time cannot be booked.</p>
-              ) : null}
-              <BookSubmit locked={isPastSlot(date, start)} />
-            </form>
-          </Card>
-
-          <Card>
-            <h2 className="text-sm font-semibold">Meetings we created</h2>
-            <p className="mt-1 text-[12px] text-[var(--muted)]">
-              Meetings booked from this page for this day. Cancel deletes that Outlook booking.
-            </p>
-            {shownEvents.length === 0 ? (
-              <p className="mt-2 text-[12px] text-[var(--muted)]">Nothing booked from here on this day.</p>
-            ) : (
-              <ul className="mt-3 max-h-[min(50vh,28rem)] space-y-2 overflow-y-auto overscroll-contain pr-1">
-                {shownEvents.map((event) => (
-                  <li key={event.id} className="rounded-xl border border-[var(--line)] bg-[#fcfafa] px-3 py-2">
-                    <div className="text-[13px] font-medium">{event.subject}</div>
-                    <div className="text-[12px] text-[var(--muted)]">
-                      {event.start}–{event.end} · {event.room}
-                    </div>
-                    {event.description ? <div className="mt-1 text-[12px] text-[var(--ink)]">{event.description}</div> : null}
-                    {replyLabel(event.roomReply, event.cancelled) ? (
-                      <div className={`mt-1 text-[12px] font-medium ${event.roomReply === "accepted" && !event.cancelled ? "text-[#2f7d6d]" : event.roomReply === "declined" || event.cancelled ? "text-[#5f6672]" : "text-[#9a6b20]"}`}>
-                        {replyLabel(event.roomReply, event.cancelled)}
+        {manage ? <Card>
+          <h2 className="text-sm font-semibold">Visit requests</h2>
+          <p className="mt-1 text-[12px] text-[var(--muted)]">
+            Employee requests waiting for a room. Open one to see every detail, fill gaps, choose a room, then submit.
+          </p>
+          {deskVisits.length === 0 ? (
+            <p className="mt-3 text-[13px] text-[var(--muted)]">No employee visit requests waiting for a room.</p>
+          ) : (
+            <ul className="mt-3 grid gap-2 md:grid-cols-2">
+              {deskVisits.map((visit) => {
+                const active = visit.id === selectedId;
+                const guest = visit.guests[0];
+                return (
+                  <li key={visit.id}>
+                    <button
+                      type="button"
+                      onClick={() => openRequest(visit)}
+                      className={`w-full rounded-xl border px-3 py-2 text-left ${
+                        active ? "border-[var(--brand)] bg-[var(--brand-soft)]" : "border-[var(--line)] bg-[#fcfafa] hover:bg-white"
+                      }`}
+                    >
+                      <div className="text-[13px] font-medium">
+                        {visit.visitCode} · {guest?.fullName || "Guest"}
                       </div>
-                    ) : null}
-                    <form action={cancelRoomTrialAction} className="mt-2">
-                      <input type="hidden" name="eventId" value={event.id} />
-                      <input type="hidden" name="date" value={date} />
-                      <button type="submit" className="cursor-pointer text-[12px] font-medium text-[#b14a42]">
-                        Cancel booking
-                      </button>
-                    </form>
+                      <div className="text-[12px] text-[var(--muted)]">
+                        {visit.visitDate} {visit.arrival} · {visit.requester}
+                        {visit.proposedRoom
+                          ? ` · ${proposedRoomLabel(rooms, visit.proposedRoom, visit.arrival)}`
+                          : ""}
+                      </div>
+                      <div className="mt-1 truncate text-[12px] text-[var(--ink)]">{visit.purpose || "Purpose not given yet"}</div>
+                    </button>
                   </li>
-                ))}
-              </ul>
-            )}
-          </Card>
-        </div>
+                );
+              })}
+            </ul>
+          )}
+        </Card> : null}
       </div>
+
+      <Card padded={false} className="flex h-[calc(100vh-8rem)] min-h-[28rem] flex-col overflow-hidden lg:sticky lg:top-4">
+        <div className="border-b border-[var(--line)] px-4 py-3">
+          <h2 className="text-sm font-semibold">Meetings</h2>
+          <p className="mt-1 text-[12px] text-[var(--muted)]">
+            {manage ? "Newest first for this day. Cancel needs a written reason." : "Newest first for this day."}
+          </p>
+        </div>
+        <ul className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain p-3">
+          {shownEvents.length === 0 ? (
+            <li className="px-1 py-6 text-center text-[13px] text-[var(--muted)]">No meetings booked from here on this day.</li>
+          ) : (
+            shownEvents.map((event) => (
+              <li key={event.id} className="rounded-xl border border-[var(--line)] bg-[#fcfafa] px-3 py-2">
+                <div className="text-[13px] font-medium">{event.subject}</div>
+                <div className="text-[12px] text-[var(--muted)]">
+                  {event.start}–{event.end} · {event.room}
+                </div>
+                {event.description ? <div className="mt-1 text-[12px] text-[var(--ink)]">{event.description}</div> : null}
+                {replyLabel(event.roomReply, event.cancelled) ? (
+                  <div className={`mt-1 text-[12px] font-medium ${event.roomReply === "accepted" && !event.cancelled ? "text-[#2f7d6d]" : event.roomReply === "declined" || event.cancelled ? "text-[#5f6672]" : "text-[#9a6b20]"}`}>
+                    {replyLabel(event.roomReply, event.cancelled)}
+                  </div>
+                ) : null}
+                {event.cancelled || !manage ? null : cancelId === event.id ? (
+                  <form action={cancelRoomTrialAction} className="mt-2 space-y-2">
+                    <input type="hidden" name="eventId" value={event.id} />
+                    <input type="hidden" name="date" value={date} />
+                    <Textarea name="reason" required placeholder="Cancellation reason" className="min-h-16" />
+                    <div className="flex gap-2">
+                      <Button type="submit" variant="danger">
+                        Submit cancellation
+                      </Button>
+                      <button type="button" className="text-[12px] text-[var(--muted)]" onClick={() => setCancelId(null)}>
+                        Back
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <button type="button" className="mt-2 cursor-pointer text-[12px] font-medium text-[#b14a42]" onClick={() => setCancelId(event.id)}>
+                    Cancel
+                  </button>
+                )}
+              </li>
+            ))
+          )}
+        </ul>
+      </Card>
+
+      {selected ? (
+        <WideModal title={`${selected.visitCode} · complete request`} onClose={() => setSelectedId(null)}>
+          <p className="text-[13px] text-[var(--muted)]">
+            From {selected.requester} · {selected.department} · {selected.guestKind}. Proposed room:{" "}
+            {selected.proposedRoom ? proposedRoomLabel(rooms, selected.proposedRoom, selected.arrival) : "N/A"}.
+            Reception fills anything missing, then submits. The room is asked to accept; everyone is emailed when it confirms.
+          </p>
+          {selected.source === "STAFF" ? (
+            <div className="mt-3">
+              <Button href={`/request/${selected.id}`} variant="secondary">
+                Edit all details
+              </Button>
+            </div>
+          ) : null}
+          <div className="mt-3 rounded-xl border border-[var(--line)] bg-[#fcfafa] p-3 text-[13px]">
+            {selected.guests.map((guest) => (
+              <div key={guest.id} className="py-1">
+                <span className="font-medium">{guest.fullName}</span>
+                <span className="text-[var(--muted)]">
+                  {" "}
+                  · {guest.company || "Company not given"} · {guest.jobTitle || "Job title not given"}
+                </span>
+              </div>
+            ))}
+          </div>
+          <form action={bookRoomTrialAction} encType="multipart/form-data" className="mt-4 grid gap-3 md:grid-cols-2">
+            <FormBusy label="Booking…" />
+            <input type="hidden" name="visitId" value={selected.id} />
+            <input type="hidden" name="subject" value={`${selected.visitCode} · Guest visit · ${room}`} />
+            <Field label="Guest mobile">
+              <TextInput name="guestMobile" value={guestMobile} onChange={(event) => setGuestMobile(event.target.value)} placeholder="Optional" />
+            </Field>
+            <Field label="Guest email">
+              <TextInput name="guestEmail" type="email" value={guestEmail} onChange={(event) => setGuestEmail(event.target.value)} placeholder="Optional" />
+            </Field>
+            <TourField defaultValue={selected.tourType} />
+            <div className="md:col-span-2">
+              <Field label="Purpose of visit" required>
+                <Textarea name="purpose" value={purpose} onChange={(event) => setPurpose(event.target.value)} required className="min-h-20" />
+              </Field>
+            </div>
+            <RoomFields date={date} go={go} room={room} setRoom={setRoom} rooms={rooms} start={start} setStart={setStart} end={end} setEnd={setEnd} />
+            <div className="md:col-span-2">
+              <GuestDocFields docs={selected.docs} />
+            </div>
+            <div className="md:col-span-2">
+              <InvitePeople
+                key={selected.id}
+                people={people}
+                bookerEmail={bookerEmail}
+                initial={selected.invitees}
+                hint="Colleagues the requester invited are already listed. After the room confirms, the invitation goes to the requester, these colleagues, and the administration contact for this visit. Guests are not invited."
+              />
+            </div>
+            {isPastSlot(date, start) ? (
+              <p className="md:col-span-2 text-[12px] font-medium text-[#b14a42]">Past date or time cannot be booked.</p>
+            ) : null}
+            <div className="md:col-span-2 flex justify-end">
+              <BookSubmit locked={isPastSlot(date, start)} />
+            </div>
+          </form>
+        </WideModal>
+      ) : null}
+
+      {visitorOpen ? (
+        <WideModal title="Visitor Book" onClose={() => setVisitorOpen(false)}>
+          <p className="text-[13px] text-[var(--muted)]">
+            Reception books this immediately — no line-manager approval. When the room accepts, {mailbox} emails the requester, invited colleagues, and the administration contact for this visit. Guests are not invited.
+          </p>
+          <VisitorBookForm
+            date={date}
+            go={go}
+            room={room}
+            setRoom={setRoom}
+            rooms={rooms}
+            start={start}
+            setStart={setStart}
+            end={end}
+            setEnd={setEnd}
+            people={people}
+            bookerEmail={bookerEmail}
+            departments={departments}
+          />
+        </WideModal>
+      ) : null}
 
       {tip ? (
         <div
@@ -327,126 +451,203 @@ export function RoomsBoard({
             {tip.room} · {tip.booking.start}–{tip.booking.end}
           </div>
           {tip.booking.description ? <div className="mt-1 text-[var(--ink)]">{tip.booking.description}</div> : null}
-          {replyLabel(tip.booking.roomReply, tip.booking.cancelled) ? (
-            <div
-              className={`mt-1 font-medium ${
-                tip.booking.cancelled || tip.booking.roomReply === "declined"
-                  ? "text-[#5f6672]"
-                  : tip.booking.roomReply === "accepted"
-                    ? "text-[#2f7d6d]"
-                    : "text-[#9a6b20]"
-              }`}
-            >
-              {replyLabel(tip.booking.roomReply, tip.booking.cancelled)}
-            </div>
-          ) : null}
         </div>
       ) : null}
     </div>
   );
 }
 
-function InvitePeople({
+function WideModal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-[rgba(26,21,21,0.4)] p-4 py-8">
+      <div className="w-full max-w-5xl rounded-2xl border border-[var(--line)] bg-white p-5 shadow-lg">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <h2 className="text-base font-semibold">{title}</h2>
+          <button type="button" className="text-[22px] leading-none text-[var(--muted)]" onClick={onClose} aria-label="Close">
+            ×
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function VisitorBookForm({
+  date,
+  go,
+  room,
+  setRoom,
+  rooms,
+  start,
+  setStart,
+  end,
+  setEnd,
   people,
   bookerEmail,
+  departments,
 }: {
+  date: string;
+  go: (next: string) => void;
+  room: string;
+  setRoom: (value: string) => void;
+  rooms: RoomDayRow[];
+  start: string;
+  setStart: (value: string) => void;
+  end: string;
+  setEnd: (value: string) => void;
   people: { value: string; label: string; hint?: string }[];
   bookerEmail: string;
+  departments: { id: string; name: string }[];
 }) {
-  const booker = bookerEmail.trim().toLowerCase();
-  const [picked, setPicked] = useState<{ email: string; name: string }[]>([]);
-  const [query, setQuery] = useState("");
-  const [open, setOpen] = useState(false);
-  const chosen = new Set(picked.map((item) => item.email));
-  const options = people.filter((item) => {
-    const email = item.value.trim().toLowerCase();
-    return email.includes("@") && email !== booker && !chosen.has(email);
-  });
-  const filtered = options.filter((item) => matches(`${item.label} ${item.hint ?? ""} ${item.value}`, query)).slice(0, 8);
+  const [rows, setRows] = useState([{ ...EMPTY_GUEST }]);
+  const [guestCount, setGuestCount] = useState(1);
+  const [giftRequired, setGiftRequired] = useState("no");
+  const [giftType, setGiftType] = useState<(typeof GIFT_TYPES)[number]>("Welcome gift");
 
-  function add(email: string, name: string) {
-    const value = email.trim().toLowerCase();
-    if (!value.includes("@") || value === booker || chosen.has(value) || picked.length >= 20) return;
-    setPicked((current) => [...current, { email: value, name: name.trim() || value.split("@")[0] || value }]);
-    setQuery("");
-    setOpen(false);
-  }
-
-  function addTyped() {
-    for (const part of query.split(/[\s,;]+/)) add(part, "");
+  function resizeGuests(raw: number) {
+    const count = Math.min(12, Math.max(1, Number.isFinite(raw) ? raw : 1));
+    setGuestCount(count);
+    setRows((current) => {
+      const next = current.slice(0, count).map((row) => ({ ...row }));
+      while (next.length < count) next.push({ ...EMPTY_GUEST });
+      return next;
+    });
   }
 
   return (
-    <div>
-      <div className="mb-1.5 text-[12px] font-medium text-[var(--muted)]">Invite people</div>
-      <p className="mb-2 text-[11px] text-[var(--muted)]">Optional. They get the Outlook meeting now, and an email from guest@ when the room confirms.</p>
-      {picked.length ? (
-        <div className="mb-2 flex flex-wrap gap-1">
-          {picked.map((item) => (
-            <span key={item.email} className="inline-flex items-center gap-1 rounded-full border border-[var(--line)] bg-[#faf7f7] px-2 py-0.5 text-[11px]">
-              {item.name}
-              <button
-                type="button"
-                className="cursor-pointer text-[var(--muted)] hover:text-[#b14a42]"
-                onClick={() => setPicked((current) => current.filter((row) => row.email !== item.email))}
-                aria-label={`Remove ${item.name}`}
-              >
-                ×
-              </button>
-              <input type="hidden" name="inviteEmail" value={item.email} />
-            </span>
-          ))}
-        </div>
-      ) : null}
-      <div className="relative">
-        <input
-          className={inputClass}
-          value={query}
-          placeholder="Name or email"
-          autoComplete="off"
-          onFocus={() => setOpen(true)}
-          onChange={(event) => {
-            setQuery(event.target.value);
-            setOpen(true);
-          }}
-          onKeyDown={(event) => {
-            if (event.key !== "Enter") return;
-            event.preventDefault();
-            if (filtered[0] && !query.includes("@")) add(filtered[0].value, filtered[0].label);
-            else addTyped();
-          }}
-          onBlur={() => {
-            window.setTimeout(() => setOpen(false), 120);
-          }}
-        />
-        {open && (filtered.length || query.includes("@")) ? (
-          <div className="absolute z-30 mt-1 max-h-48 w-full overflow-auto rounded-lg border border-[var(--line)] bg-white shadow-[0_12px_32px_rgba(26,21,21,0.12)]">
-            {filtered.map((item) => (
-              <button
-                key={item.value}
-                type="button"
-                className="block w-full px-3 py-2 text-left text-[13px] hover:bg-[#faf4f4]"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => add(item.value, item.label)}
-              >
-                <span className="block font-medium">{item.label}</span>
-                {item.hint ? <span className="block text-[12px] text-[var(--muted)]">{item.hint}</span> : null}
-              </button>
-            ))}
-            {query.includes("@") ? (
-              <button
-                type="button"
-                className="block w-full px-3 py-2 text-left text-[13px] hover:bg-[#faf4f4]"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={addTyped}
-              >
-                Add {query.trim()}
-              </button>
-            ) : null}
-          </div>
-        ) : null}
+    <form action={bookReceptionVisitAction} encType="multipart/form-data" className="mt-4 space-y-4">
+      <FormBusy label="Booking visitor…" />
+      <input type="hidden" name="visitorRows" value={rows.length} />
+      <input type="hidden" name="visitDate" value={date} />
+      <div className="grid gap-3 md:grid-cols-2">
+        <RoomFields date={date} go={go} room={room} setRoom={setRoom} rooms={rooms} start={start} setStart={setStart} end={end} setEnd={setEnd} />
+        <Field label="Department" required>
+          <SearchSelect name="departmentId" options={departments.map((item) => ({ value: item.id, label: item.name }))} placeholder="Department" required />
+        </Field>
+        <Field label="Guest type" required>
+          <select name="guestKind" className={inputClass} defaultValue="GUEST" required>
+            <option value="GUEST">Guest</option>
+            <option value="CUSTOMER">Customer</option>
+            <option value="SUPPLIER">Supplier</option>
+            <option value="VIP">VIP</option>
+          </select>
+        </Field>
+        <TourField />
       </div>
-    </div>
+      <Field label="Purpose" required>
+        <Textarea name="purpose" required placeholder="Why they are coming" className="min-h-20" />
+      </Field>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Field label="Driver and car">
+          <select name="driverRequired" className={inputClass} defaultValue="no">
+            <option value="no">No</option>
+            <option value="yes">Yes</option>
+          </select>
+        </Field>
+        <Field label="Required gate pass">
+          <select name="gatePassRequired" className={inputClass} defaultValue="no">
+            <option value="no">No</option>
+            <option value="yes">Yes</option>
+          </select>
+        </Field>
+        <Field label="Protocol gift">
+          <select name="giftRequired" className={inputClass} value={giftRequired} onChange={(event) => setGiftRequired(event.target.value)}>
+            <option value="no">No</option>
+            <option value="yes">Yes</option>
+          </select>
+        </Field>
+      </div>
+      {giftRequired === "yes" ? (
+        <Field label="Gift type" required>
+          <select name="giftType" className={inputClass} value={giftType} onChange={(event) => setGiftType(event.target.value as (typeof GIFT_TYPES)[number])} required>
+            {GIFT_TYPES.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+          </select>
+        </Field>
+      ) : null}
+      <div className="flex items-end justify-between gap-3">
+        <h3 className="text-sm font-semibold">Guests</h3>
+        <Field label="Number of guests" required>
+          <TextInput name="guestCount" type="number" min={1} max={12} required value={String(guestCount)} onChange={(event) => resizeGuests(Number(event.target.value))} />
+        </Field>
+      </div>
+      {rows.map((row, index) => (
+        <div key={index} className="grid gap-2 rounded-xl border border-[var(--line)] bg-[#fcfafa] p-3 md:grid-cols-3">
+          <Field label="Full name" required>
+            <TextInput name={`fullName_${index}`} required defaultValue={row.fullName} />
+          </Field>
+          <Field label="Mobile">
+            <TextInput name={`mobile_${index}`} placeholder="Optional" defaultValue={row.mobile} />
+          </Field>
+          <Field label="Email">
+            <TextInput name={`email_${index}`} type="email" placeholder="Optional" defaultValue={row.email} />
+          </Field>
+          <TextInput name={`company_${index}`} placeholder="Company" defaultValue={row.company} />
+          <TextInput name={`jobTitle_${index}`} placeholder="Job title" defaultValue={row.jobTitle} />
+          <TextInput name={`nationality_${index}`} placeholder="Nationality" defaultValue={row.nationality} />
+        </div>
+      ))}
+      <GuestDocFields />
+      <InvitePeople
+        people={people}
+        bookerEmail={bookerEmail}
+        hint="After the room confirms, they receive the meeting invitation with the requester and the administration contact for this visit. Guests are not invited."
+      />
+      {isPastSlot(date, start) ? <p className="text-[12px] font-medium text-[#b14a42]">Past date or time cannot be booked.</p> : null}
+      <div className="flex justify-end">
+        <BookSubmit locked={isPastSlot(date, start)} />
+      </div>
+    </form>
+  );
+}
+
+function RoomFields({
+  date,
+  go,
+  room,
+  setRoom,
+  rooms,
+  start,
+  setStart,
+  end,
+  setEnd,
+}: {
+  date: string;
+  go: (next: string) => void;
+  room: string;
+  setRoom: (value: string) => void;
+  rooms: RoomDayRow[];
+  start: string;
+  setStart: (value: string) => void;
+  end: string;
+  setEnd: (value: string) => void;
+}) {
+  return (
+    <>
+      <Field label="Room" required>
+        <select name="roomName" value={room} onChange={(event) => setRoom(event.target.value)} className={inputClass} required>
+          {rooms.map((item) => (
+            <option key={item.email} value={item.name}>
+              {item.name}
+              {item.capacity ? ` · ${item.capacity}` : ""}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Field label="Date" required>
+        <TextInput type="date" name="date" value={date} min={dubaiToday()} onChange={(event) => event.target.value && go(event.target.value)} required />
+      </Field>
+      <Field label="Start" required>
+        <TextInput type="time" name="start" value={start} onChange={(event) => setStart(event.target.value)} required />
+      </Field>
+      <Field label="End" required>
+        <TextInput type="time" name="end" value={end} onChange={(event) => setEnd(event.target.value)} required />
+      </Field>
+    </>
   );
 }
 
@@ -454,17 +655,27 @@ function BookSubmit({ locked }: { locked?: boolean }) {
   const { pending } = useFormStatus();
   return (
     <Button type="submit" disabled={locked || pending}>
-      {pending ? "Booking…" : locked ? "Time is in the past" : "Book in Outlook"}
+      {pending ? "Booking…" : locked ? "Time is in the past" : "Submit"}
     </Button>
   );
 }
 
 const navBtn =
   "inline-flex h-8 cursor-pointer items-center rounded-md border border-[var(--line)] bg-white px-3 text-[12px] font-medium hover:bg-[#faf7f7]";
+const primaryBtn =
+  "inline-flex h-8 cursor-pointer items-center rounded-md border border-[var(--brand)] bg-[var(--brand-soft)] px-3 text-[12px] font-medium text-[var(--brand-ink)] hover:bg-[#f3dede]";
 
 function shiftDate(date: string, days: number) {
   const [year, month, day] = date.split("-").map(Number);
   return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+}
+
+function proposedRoomLabel(rooms: RoomDayRow[], name: string, time: string) {
+  const row = rooms.find((item) => roomKey(item.name) === roomKey(name));
+  if (!row) return name;
+  const slot = row.slots.find((item) => item.time === time);
+  if (slot && !slot.free) return `${name} · Already Booked`;
+  return name;
 }
 
 function addMinutes(time: string, minutes: number) {

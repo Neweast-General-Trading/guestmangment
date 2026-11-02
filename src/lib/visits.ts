@@ -11,7 +11,7 @@ import { canAssignParking, canOperateGate, canSeeAllVisits, canSeeIdentity, isIn
 import { parseQrPayload } from "./qr";
 import { hospitalityData, type HospitalityInput } from "./hospitality";
 import { flagsFromNeeds, parseGuestNeeds } from "./guest-needs";
-import { releaseOutlookRoom, syncOutlookRoom } from "./room-booking";
+import { emailVisitCancelled, releaseOutlookRoom, syncOutlookRoom } from "./room-booking";
 import type { Prisma } from "@prisma/client";
 
 export const visitInclude = {
@@ -98,9 +98,18 @@ export type VisitDraft = {
   hospitality?: HospitalityInput;
 };
 
+export function isPendingContact(value?: string | null) {
+  const text = (value || "").trim();
+  return !text || /^(pending:|inbox:)/i.test(text);
+}
+
 export async function upsertVisitor(input: VisitorInput) {
-  const mobile = input.mobile.trim();
-  const existing = await prisma.visitor.findFirst({ where: { mobile } });
+  const typedMobile = input.mobile.trim().replace(/\s+/g, "");
+  const mobile =
+    typedMobile && !isPendingContact(typedMobile)
+      ? typedMobile
+      : `pending:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const existing = typedMobile && !isPendingContact(typedMobile) ? await prisma.visitor.findFirst({ where: { mobile: typedMobile } }) : null;
   const data = {
     fullName: input.fullName.trim(),
     mobile,
@@ -342,6 +351,7 @@ export async function cancelVisit(
   if (["COMPLETED", "CHECKED_OUT", "CANCELLED"].includes(visit.status)) {
     throw new Error("This visit is already closed.");
   }
+  await emailVisitCancelled(visitId, reason);
   await prisma.visit.update({
     where: { id: visitId },
     data: {
@@ -351,7 +361,7 @@ export async function cancelVisit(
       cancelSource: source,
     },
   });
-  await releaseOutlookRoom(visitId);
+  await releaseOutlookRoom(visitId, { notify: false, reason });
   await addTimeline({ visitId, event: "Visit cancelled", note: `${source}: ${reason}`, userId: actor.id });
   await writeAudit({
     userId: actor.id,

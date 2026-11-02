@@ -26,7 +26,7 @@ export default async function GatePassRequestsPage({
     <div className="mx-auto max-w-4xl">
       <PageHeader
         title="Gate passes"
-        description="HR reviews the gate pass, then Reception marks it Done when the pass is in hand."
+        description="Reception approves the gate pass, then uploads the file when it is ready."
       />
       {query.error ? (
         <p className="mb-4 rounded-md border border-[#ead8d8] bg-[var(--tint-peach)] px-3 py-2 text-[13px] text-[var(--brand-ink)]">
@@ -35,7 +35,7 @@ export default async function GatePassRequestsPage({
       ) : null}
       {query.approved || query.received ? (
         <p className="mb-4 rounded-md border border-[#d7e6da] bg-[var(--tint-sage)] px-3 py-2 text-[13px]">
-          {query.approved ? "Gate pass approved. Status is now Preparing." : "Gate pass marked Done at Reception."}
+          {query.approved ? "Gate pass approved. Upload the file when it is ready." : "Gate pass uploaded."}
         </p>
       ) : null}
 

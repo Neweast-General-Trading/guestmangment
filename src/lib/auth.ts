@@ -78,6 +78,8 @@ export async function requireSession() {
   if (!user || !user.isActive) return null;
   return {
     ...session,
+    email: user.email,
+    name: user.name,
     role: (isFullAccess(user.email) ? "SYSTEM_ADMIN" : user.role) as Role,
     departmentId: user.departmentId,
     jobTitle: user.jobTitle,

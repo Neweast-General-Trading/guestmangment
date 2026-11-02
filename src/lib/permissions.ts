@@ -1,6 +1,6 @@
-import { canManageAccess, canSeeTracking, canUseRequestDesk, isFullAccess } from "./access";
+import { canManageAccess, canSeeTracking, canUseRequestDesk, isFullAccess, isRoomBooker, isRoomsViewer } from "./access";
 import { GATE_PASS_OWNER_EMAIL, GIFT_OWNER_EMAIL } from "./arrangement-types";
-import { INSIDE_STATUSES, type Role } from "./constants";
+import { INSIDE_STATUSES, isSalmaEmail, type Role } from "./constants";
 
 export function canManageServiceMaster(role: Role) {
   return role === "SYSTEM_ADMIN" || role === "HR_ADMIN";
@@ -82,8 +82,21 @@ export function canApproveGatePass(user: { role: Role; email: string }) {
   return isGatePassApprover(user) || user.role === "SYSTEM_ADMIN";
 }
 
-export function canSeeEscalations(role: Role) {
+export function canCompleteDriver(user: { role: string; email?: string | null }) {
+  return user.role === "SYSTEM_ADMIN" || isRoomBooker(user.email);
+}
+
+export function canSeeDrivers(user: { role: string; email?: string | null }) {
+  return canCompleteDriver(user);
+}
+
+export function canSeeEscalations(role: Role, email?: string) {
+  if (isSalmaEmail(email)) return true;
   return role === "MANAGEMENT" || role === "SYSTEM_ADMIN" || role === "HR_ADMIN";
+}
+
+export function canDecideBuildingTour(user: Pick<SessionUser, "role" | "email">) {
+  return isSalmaEmail(user.email) || user.role === "SYSTEM_ADMIN";
 }
 
 export function canDecideEscalation(user: Pick<SessionUser, "role" | "email">) {
@@ -123,8 +136,8 @@ export function canAssignParking(role: Role, opts: { actorId: string; hostId: st
   return canOperateGate(role) || role === "HR_ADMIN" || opts.actorId === opts.hostId;
 }
 
-export function canAssignStaffParking(role: Role | string) {
-  return role === "SYSTEM_ADMIN";
+export function canAssignStaffParking(role: Role | string, email?: string | null) {
+  return role === "SYSTEM_ADMIN" || isRoomBooker(email);
 }
 
 export function isInside(status: string) {
@@ -181,7 +194,7 @@ function fullAccessNav(): NavGroup[] {
       items: [
         { href: "/reports", label: "Reports" },
         { href: "/visits", label: "Visits" },
-        { href: "/escalations", label: "Escalations" },
+        { href: "/escalations", label: "Building tours" },
         { href: "/access", label: "Access" },
         { href: "/assign-parking", label: "Assign parking" },
       ],
@@ -199,12 +212,16 @@ function fullAccessNav(): NavGroup[] {
   ];
 }
 
-function trackingNav(email?: string): NavItem[] {
-  return canSeeTracking(email) ? [{ href: "/tracking", label: "Tracking analysis" }] : [];
+function trackingNav(role: Role, email?: string): NavItem[] {
+  const items: NavItem[] = canSeeTracking(email) ? [{ href: "/tracking", label: "Tracking analysis" }] : [];
+  if (isSalmaEmail(email) && !["MANAGEMENT", "SYSTEM_ADMIN", "HR_ADMIN"].includes(role)) {
+    items.push({ href: "/escalations", label: "Building tours" });
+  }
+  return items;
 }
 
-function withTrackingNav(groups: NavGroup[], email?: string): NavGroup[] {
-  const extra = trackingNav(email);
+function withTrackingNav(groups: NavGroup[], email?: string, role?: Role): NavGroup[] {
+  const extra = trackingNav(role || "EMPLOYEE", email);
   if (!extra.length) return groups;
   const hasReports = groups.some((group) => group.label === "Reporting and control");
   return groups.map((group, index) => {
@@ -214,8 +231,19 @@ function withTrackingNav(groups: NavGroup[], email?: string): NavGroup[] {
   });
 }
 
+export function canOpenAppPath(role: Role, email: string | undefined, accessGroup: string | null | undefined, pathname: string) {
+  if (pathname === "/dashboard" || pathname === "/notifications" || pathname.startsWith("/notifications/")) return true;
+  return navFor(role, email, accessGroup).some((item) => pathname === item.href || pathname.startsWith(`${item.href}/`));
+}
+
 export function navGroupsFor(role: Role, email?: string, accessGroup?: string | null): NavGroup[] {
-  if (isFullAccess(email)) return withTrackingNav(fullAccessNav(), email);
+  if (isFullAccess(email)) {
+    const groups = fullAccessNav().map((group) => ({
+      ...group,
+      items: group.items.filter((item) => item.href !== "/access" || canManageAccess(email)),
+    }));
+    return withTrackingNav(groups, email, role);
+  }
   const gifts = canSeeGifts({ role, email: email || "" })
     ? ([{ href: "/gifts", label: "Gift requests" }] as NavItem[])
     : [];
@@ -224,11 +252,27 @@ export function navGroupsFor(role: Role, email?: string, accessGroup?: string | 
     : [];
   const request = requestNav({ role, email, accessGroup });
   const access = accessNav(email);
+  if (role === "EMPLOYEE" && isRoomBooker(email)) {
+    return [
+      {
+        label: "Rooms",
+        items: [
+          ...request,
+          { href: "/rooms", label: "Room booking" },
+          { href: "/assign-parking", label: "Parking assign" },
+          { href: "/drivers", label: "Driver requests" },
+        ],
+      },
+    ];
+  }
+  if (role === "EMPLOYEE" && isRoomsViewer(email)) {
+    return [{ label: "Rooms", items: [...request, { href: "/rooms", label: "Meeting rooms" }] }];
+  }
   if (role === "EMPLOYEE") {
-    return withTrackingNav([{ label: "Employees", items: [...request, ...gifts, ...passes, ...access] }], email);
+    return withTrackingNav([{ label: "Employees", items: [...request, ...gifts, ...passes, ...access] }], email, role);
   }
   if (role === "DEPARTMENT_MANAGER") {
-    return withTrackingNav([{ label: "Managers", items: [...request, ...gifts, ...passes, ...access] }], email);
+    return withTrackingNav([{ label: "Managers", items: [...request, ...gifts, ...passes, ...access] }], email, role);
   }
   if (role === "HR_ADMIN") {
     return withTrackingNav(
@@ -247,6 +291,7 @@ export function navGroupsFor(role: Role, email?: string, accessGroup?: string | 
         },
       ],
       email,
+      role,
     );
   }
   if (role === "SECURITY_GUARD" || role === "SECURITY_SUPERVISOR") {
@@ -270,12 +315,13 @@ export function navGroupsFor(role: Role, email?: string, accessGroup?: string | 
             ...request,
             { href: "/reports", label: "Reports" },
             { href: "/visits", label: "Visits" },
-            { href: "/escalations", label: "Escalations" },
+            { href: "/escalations", label: "Building tours" },
             ...access,
           ],
         },
       ],
       email,
+      role,
     );
   }
   return withTrackingNav(
@@ -296,13 +342,15 @@ export function navGroupsFor(role: Role, email?: string, accessGroup?: string | 
         items: [
           { href: "/reports", label: "Reports" },
           { href: "/visits", label: "Visits" },
-          { href: "/escalations", label: "Escalations" },
+          { href: "/escalations", label: "Building tours" },
           ...access,
           ...(canAssignStaffParking(role) ? [{ href: "/assign-parking", label: "Assign parking" }] : []),
+          ...(canSeeDrivers({ role, email }) ? [{ href: "/drivers", label: "Driver requests" }] : []),
         ],
       },
     ],
     email,
+    role,
   );
 }
 

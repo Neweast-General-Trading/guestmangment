@@ -27,6 +27,7 @@ type VisitBits = {
 export function ArrangementDesk({
   visit,
   canComplete,
+  canCompleteDriver = false,
   canApprove,
   canApprovePass = false,
   from = "intake",
@@ -36,9 +37,10 @@ export function ArrangementDesk({
 }: {
   visit: VisitBits;
   canComplete: boolean;
+  canCompleteDriver?: boolean;
   canApprove: boolean;
   canApprovePass?: boolean;
-  from?: "intake" | "gifts" | "passes";
+  from?: "intake" | "gifts" | "passes" | "drivers";
   showDriver?: boolean;
   showGift?: boolean;
   showPass?: boolean;
@@ -54,17 +56,17 @@ export function ArrangementDesk({
             <ArrangementPill status={visit.driverStatus} />
           </div>
           <p className="mt-2 text-[13px] text-[var(--muted)]">
-            Contact the driver, confirm the trip, then mark Done so the requester sees the update.
+            Sachini contacts the driver and confirms the trip. The requester sees the update when it is confirmed.
           </p>
           {visit.driverName ? <p className="mt-2 text-[13px]">Driver on file: {visit.driverName}</p> : null}
           {visit.driverNote ? <p className="mt-2 whitespace-pre-wrap text-[13px]">{visit.driverNote}</p> : null}
-          {canComplete && visit.driverStatus !== "DONE" ? (
+          {canCompleteDriver && visit.driverStatus !== "DONE" ? (
             <form action={completeDriverAction} className="mt-3 space-y-2">
               <FormBusy label="Saving driver…" />
               <input type="hidden" name="visitId" value={visit.id} />
               <input type="hidden" name="from" value={from} />
               <Textarea name="note" required placeholder="Contacted the driver and confirmed the trip." className="min-h-20" />
-              <Button type="submit">Mark driver Done</Button>
+              <Button type="submit">Confirm driver</Button>
             </form>
           ) : null}
         </Card>
@@ -114,10 +116,10 @@ export function ArrangementDesk({
           </div>
           <p className="mt-1 text-[13px] text-[var(--muted)]">
             {visit.gatePassStatus === "PENDING"
-              ? "Waiting for HR to approve the gate pass."
+              ? "Waiting for Reception to approve the gate pass."
               : visit.gatePassStatus === "PREPARING"
-                ? "HR is preparing the gate pass. Reception marks Done when it is in hand."
-                : "Gate pass is ready at Reception."}
+                ? "Reception is preparing the gate pass. Upload the file when it is ready."
+                : "Gate pass file is ready."}
           </p>
           {visit.gatePassNote ? <p className="mt-2 whitespace-pre-wrap text-[13px]">{visit.gatePassNote}</p> : null}
           {canApprovePass && visit.gatePassStatus === "PENDING" ? (
@@ -134,8 +136,9 @@ export function ArrangementDesk({
               <FormBusy label="Saving gate pass…" />
               <input type="hidden" name="visitId" value={visit.id} />
               <input type="hidden" name="from" value={from} />
-              <Textarea name="note" placeholder="Gate pass received at Reception." className="min-h-16" />
-              <Button type="submit">Pass received · Done</Button>
+              <input name="file" type="file" accept="application/pdf,image/png,image/jpeg,image/webp" required className="block w-full text-[13px]" />
+              <Textarea name="note" placeholder="Gate pass uploaded." className="min-h-16" />
+              <Button type="submit">Upload gate pass · Done</Button>
             </form>
           ) : null}
         </Card>

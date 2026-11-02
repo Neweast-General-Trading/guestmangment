@@ -4,6 +4,8 @@ import {
   attachGuestEvents,
   findRoomByName,
   isDummyMail,
+  isGuestBookableRoom,
+  isOtherFloorRoom,
   isReleasedBooking,
   isRoomReplyMail,
   roomKey,
@@ -33,6 +35,15 @@ const rooms = [
 ];
 assert.equal(findRoomByName(rooms, "vip conference")?.email, "vip.conference@neweast.co");
 assert.equal(findRoomByName(rooms, "Boardroom A"), null);
+assert.equal(isGuestBookableRoom("Tokyo"), true);
+assert.equal(isGuestBookableRoom("Dubai"), true);
+assert.equal(isGuestBookableRoom("Riyadh"), true);
+assert.equal(isGuestBookableRoom("MB_FF_Meeting Room_1"), false);
+assert.equal(isGuestBookableRoom("MB_FF_Meeting Room_1", "1"), false);
+assert.equal(isGuestBookableRoom("VIP Conference"), false);
+assert.equal(isGuestBookableRoom("Auditorium"), false);
+assert.equal(isOtherFloorRoom("MB_FF_Meeting Room_2", "1"), true);
+assert.equal(isOtherFloorRoom("Tokyo", "Ground"), false);
 
 const payload = roomEventBody({
   subject: "GV-1 · Guest",

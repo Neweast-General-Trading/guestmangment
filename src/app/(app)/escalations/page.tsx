@@ -1,37 +1,37 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { decideEscalationAction } from "@/app/actions";
+import { decideBuildingTourAction } from "@/app/actions";
 import { FormBusy } from "@/components/form-busy";
 import { StatusPill, TypeTag } from "@/components/status";
 import { Card, PageHeader, Textarea } from "@/components/ui";
 import { requireSession } from "@/lib/auth";
-import { GUEST_KIND_LABEL, type GuestKind } from "@/lib/constants";
+import { GUEST_KIND_LABEL, TOUR_TYPE_LABEL, parseTourType, type GuestKind, type TourType } from "@/lib/constants";
 import { fmtDateTime } from "@/lib/format";
-import { canDecideEscalation, canSeeEscalations } from "@/lib/permissions";
+import { canDecideBuildingTour, canSeeEscalations } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { visitInclude } from "@/lib/visits";
 
 export default async function EscalationsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; rejected?: string }>;
+  searchParams: Promise<{ error?: string; rejected?: string; approved?: string }>;
 }) {
   const session = await requireSession();
   if (!session) return null;
-  if (!canSeeEscalations(session.role) && !canDecideEscalation(session)) redirect("/dashboard");
-  const { error, rejected } = await searchParams;
+  if (!canSeeEscalations(session.role, session.email) && !canDecideBuildingTour(session)) redirect("/dashboard");
+  const { error, rejected, approved } = await searchParams;
   const visits = await prisma.visit.findMany({
-    where: { source: { in: ["EMAIL", "STAFF"] }, status: "ESCALATED" },
+    where: { tourType: "BUILDING", tourStatus: "PENDING" },
     include: visitInclude,
     orderBy: { updatedAt: "desc" },
   });
-  const canDecide = canDecideEscalation(session);
+  const canDecide = canDecideBuildingTour(session);
 
   return (
     <div>
       <PageHeader
-        title="Escalations"
-        description="Customer email requests waiting on Samir Ibrahim."
+        title="Building tours"
+        description="Building Tour requests wait here for Salma Moufallah. A supplier visit and a ground-floor tour are notices only. They do not wait here."
       />
       {error ? (
         <p className="mb-4 rounded-md border border-[#ead8d8] bg-[var(--tint-peach)] px-3 py-2 text-[13px] text-[var(--brand-ink)]">
@@ -40,20 +40,26 @@ export default async function EscalationsPage({
       ) : null}
       {rejected ? (
         <p className="mb-4 rounded-md border border-[#ead8d8] bg-[var(--tint-peach)] px-3 py-2 text-[13px]">
-          Request rejected.
+          Building tour rejected.
+        </p>
+      ) : null}
+      {approved ? (
+        <p className="mb-4 rounded-md border border-[#d7e6da] bg-[var(--tint-sage)] px-3 py-2 text-[13px]">
+          Building tour approved. The booking is confirmed and participants are emailed.
         </p>
       ) : null}
 
       {visits.length === 0 ? (
         <Card>
-          <p className="text-sm font-medium">No escalations waiting.</p>
-          <p className="mt-1 text-[13px] text-[var(--muted)]">Customer requests appear here after Administration sends them up.</p>
+          <p className="text-sm font-medium">No building tours waiting.</p>
+          <p className="mt-1 text-[13px] text-[var(--muted)]">A Building Tour on a customer visit appears here for Salma.</p>
         </Card>
       ) : (
         <div className="space-y-4">
           {visits.map((visit) => {
             const kind = (visit.guestKind || "CUSTOMER") as GuestKind;
             const guest = visit.visitors[0]?.visitor;
+            const tour = parseTourType(visit.tourType);
             return (
               <Card key={visit.id} padded={false}>
                 <div className="border-b border-[var(--line)] px-5 py-4">
@@ -72,9 +78,9 @@ export default async function EscalationsPage({
                 <div className="grid gap-4 px-5 py-4 sm:grid-cols-3">
                   <Fact label="Guest" value={guest?.fullName} extra={`${visit.visitorCount} people`} />
                   <Fact label="Department" value={visit.department.name} extra={visit.host.name} />
-                  <Fact label="Driver" value={visit.driverRequired ? "Required" : "No"} extra={visit.meetingRoom || "Room later"} />
+                  <Fact label="Tour" value={TOUR_TYPE_LABEL[tour as TourType]} extra={visit.meetingRoom || "Room later"} />
                 </div>
-                {visit.visitors.length > 1 ? (
+                {visit.visitors.length ? (
                   <ul className="border-t border-[var(--line)] px-5 py-3 text-[13px] text-[var(--muted)]">
                     {visit.visitors.map((link) => (
                       <li key={link.id}>
@@ -85,14 +91,11 @@ export default async function EscalationsPage({
                     ))}
                   </ul>
                 ) : null}
-                {visit.escalationNotes ? (
-                  <p className="border-t border-[var(--line)] px-5 py-3 text-[13px]">{visit.escalationNotes}</p>
-                ) : null}
                 {canDecide ? (
-                  <form action={decideEscalationAction} className="space-y-2 border-t border-[var(--line)] px-5 py-4">
+                  <form action={decideBuildingTourAction} className="space-y-2 border-t border-[var(--line)] px-5 py-4">
                     <FormBusy label="Sending decision…" />
                     <input type="hidden" name="visitId" value={visit.id} />
-                    <Textarea name="notes" placeholder="Notes for Administration" />
+                    <Textarea name="notes" placeholder="Notes (optional)" />
                     <div className="flex gap-2">
                       <button name="decision" value="APPROVED" className="h-8 rounded-md border border-[var(--brand)] bg-[var(--brand-soft)] px-3 text-[12px] font-medium text-[var(--brand-ink)]">
                         Approve
@@ -104,7 +107,7 @@ export default async function EscalationsPage({
                   </form>
                 ) : (
                   <p className="border-t border-[var(--line)] px-5 py-3 text-[12px] text-[var(--muted)]">
-                    Waiting for Samir Ibrahim.
+                    Waiting for Salma Moufallah.
                   </p>
                 )}
               </Card>
@@ -112,6 +115,7 @@ export default async function EscalationsPage({
           })}
         </div>
       )}
+
     </div>
   );
 }

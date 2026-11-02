@@ -16,12 +16,14 @@ export function visitLink(visitId: string) {
 
 export function noticeCta(type: string) {
   if (type === "APPROVAL_REQUIRED" || type === "LINE_APPROVAL") return "Open to approve";
-  if (type === "ESCALATION_REQUIRED") return "Open escalation";
+  if (type === "ESCALATION_REQUIRED" || type === "BUILDING_TOUR") return "Open building tour";
   if (type === "SERVICE_PREP") return "Open service tasks";
   if (type === "SECURITY_DESK") return "Open security desk";
   if (type === "GIFT_REQUEST") return "Open gift request";
   if (type === "GATE_PASS_REQUEST") return "Open gate pass";
-  if (type === "DRIVER_NEEDED" || type === "GIFT_READY" || type === "GATE_PASS_READY" || type === "INTAKE_READY") {
+  if (type === "DRIVER_NEEDED") return "Open driver requests";
+  if (type === "SUPPLIER_APPROVAL" || type === "BUILDING_TOUR") return "Open building tour";
+  if (type === "GIFT_READY" || type === "GATE_PASS_READY" || type === "INTAKE_READY") {
     return "Open intake";
   }
   if (type === "DRIVER_UPDATE" || type === "GIFT_UPDATE" || type === "GATE_PASS_UPDATE") return "Open request";
@@ -38,10 +40,14 @@ export function noticeUrl(type: string, visitId?: string | null) {
   }
   if (type === "GIFT_REQUEST") return `${appBaseUrl()}/gifts`;
   if (type === "GATE_PASS_REQUEST") return `${appBaseUrl()}/passes`;
-  if (type === "DRIVER_NEEDED" || type === "GIFT_READY" || type === "GATE_PASS_READY" || type === "INTAKE_READY") {
+  if (type === "DRIVER_NEEDED") return `${appBaseUrl()}/drivers`;
+  if (type === "GIFT_READY" || type === "GATE_PASS_READY" || type === "INTAKE_READY") {
     return `${appBaseUrl()}/intake/${visitId}`;
   }
-  if (type === "ESCALATION_REQUIRED") return `${appBaseUrl()}/escalations`;
+  if (type === "TOUR_NOTICE") return `${appBaseUrl()}/notifications`;
+  if (type === "ESCALATION_REQUIRED" || type === "BUILDING_TOUR" || type === "SUPPLIER_APPROVAL") {
+    return `${appBaseUrl()}/escalations`;
+  }
   if (type === "SECURITY_DESK") return `${appBaseUrl()}/security?queue=desk`;
   return visitLink(visitId);
 }

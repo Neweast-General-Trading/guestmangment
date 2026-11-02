@@ -11,7 +11,9 @@ import { requireSession } from "@/lib/auth";
 import { GUEST_KIND_LABEL, type GuestKind } from "@/lib/constants";
 import { meetingRoomOptions } from "@/lib/graph";
 import { fmtDateTime } from "@/lib/format";
-import { canApproveGatePass, canApproveGift, canDecideEscalation, canManageIntake } from "@/lib/permissions";
+import { canApproveGatePass, canApproveGift, canCompleteDriver, canDecideEscalation, canManageIntake } from "@/lib/permissions";
+import { guestDocHref, parseGuestDocs } from "@/lib/guest-doc-types";
+import { canEditStaffRequest } from "@/lib/staff-request";
 import { prisma } from "@/lib/prisma";
 import { lookups } from "@/lib/queries";
 import { timeStamp, todayStamp } from "@/lib/visit-schedule";
@@ -46,6 +48,11 @@ export default async function IntakeDetailPage({
           <div className="flex flex-wrap items-center gap-2">
             <TypeTag type={kind}>{GUEST_KIND_LABEL[kind]}</TypeTag>
             <StatusPill status={visit.status} />
+            {visit.source === "STAFF" && canEditStaffRequest(session, visit) ? (
+              <Button href={`/request/${visit.id}`} variant="secondary">
+                Edit all details
+              </Button>
+            ) : null}
             <Button href="/intake" variant="secondary">
               Back to inbox
             </Button>
@@ -125,9 +132,19 @@ export default async function IntakeDetailPage({
         </Card>
       ) : null}
 
+      {visit.tourType === "BUILDING" && visit.tourStatus === "PENDING" ? (
+        <Card className="mb-5" tone="sand">
+          <p className="text-[13px] font-medium">Building Tour is waiting for Salma Moufallah.</p>
+          <p className="mt-1 text-[12px] text-[var(--muted)]">
+            Teams and email were sent. Confirmation of the booking waits until she approves.
+          </p>
+        </Card>
+      ) : null}
+
       <ArrangementDesk
         visit={visit}
         canComplete={canManageIntake(session.role)}
+        canCompleteDriver={canCompleteDriver(session)}
         canApprove={canApproveGift(session)}
         canApprovePass={canApproveGatePass(session)}
         from="intake"
@@ -193,14 +210,19 @@ export default async function IntakeDetailPage({
             driverVehicle: visit.driverVehicle || "",
             visitors: visit.visitors.map((link) => ({
               fullName: link.visitor.fullName,
-              mobile: link.visitor.mobile.startsWith("inbox:") ? "" : link.visitor.mobile,
+              mobile: link.visitor.mobile.startsWith("inbox:") || link.visitor.mobile.startsWith("pending:") ? "" : link.visitor.mobile,
               email: link.visitor.email || "",
               company: link.visitor.company || "",
               jobTitle: link.visitor.jobTitle || "",
               nationality: link.visitor.nationality || "",
             })),
-            canEscalate: canEdit && (kind === "CUSTOMER" || visit.type === "CUSTOMER"),
+            tourType: visit.tourType,
             locked: !canEdit,
+            docs: parseGuestDocs(visit.attachmentsJson).map((doc) => ({
+              type: doc.type,
+              name: doc.name,
+              href: guestDocHref(visit.id, doc.type),
+            })),
           }}
           hosts={hosts.map((user) => ({
             value: user.id,

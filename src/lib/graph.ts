@@ -114,18 +114,90 @@ type PlaceRow = {
   building?: string;
 };
 
+const GUEST_CITY_ROOMS = new Set(
+  [
+    "tokyo",
+    "paris",
+    "berlin",
+    "dubai",
+    "shanghai",
+    "riyadh",
+    "london",
+    "rome",
+    "madrid",
+    "vienna",
+    "cairo",
+    "doha",
+    "kuwait",
+    "muscat",
+    "singapore",
+    "beijing",
+    "istanbul",
+    "moscow",
+    "geneva",
+    "zurich",
+    "amsterdam",
+    "brussels",
+    "lisbon",
+    "athens",
+    "prague",
+    "warsaw",
+    "budapest",
+    "stockholm",
+    "oslo",
+    "helsinki",
+    "munich",
+    "frankfurt",
+    "milan",
+    "barcelona",
+    "jeddah",
+    "manama",
+    "sharjah",
+    "dammam",
+    "new york",
+    "abu dhabi",
+    "hong kong",
+  ].map((name) => name.toLowerCase()),
+);
+
+function roomLabelKey(name: string) {
+  return name.trim().toLowerCase().replace(/_/g, " ").replace(/\s+/g, " ");
+}
+
+export function isOtherFloorRoom(name: string, floor = "") {
+  const blob = `${name} ${floor}`;
+  if (/\b(FF|TF|SF|1F|2F|3F|4F)\b/i.test(blob)) return true;
+  if (/\b(1st|2nd|3rd|4th|first|second|third|fourth)\s*floor\b/i.test(blob)) return true;
+  if (/^(1|2|3|4|5|6|L1|L2|L3)$/i.test(floor.trim())) return true;
+  if (/\b(MB|OPB|OPS)[ _]/i.test(name)) return true;
+  return false;
+}
+
+/** Ground-floor city rooms only — other HQ floors cannot be booked in Guest Management. */
+export function isGuestBookableRoom(name: string, floor = "") {
+  const label = name.trim();
+  if (!label) return false;
+  if (isOtherFloorRoom(label, floor)) return false;
+  const key = roomLabelKey(label);
+  if (/\b(room|meeting|conference|auditorium|board|vip)\b/i.test(key)) return false;
+  if (GUEST_CITY_ROOMS.has(key)) return true;
+  if (!/^[a-z]+(?:[ '-][a-z]+)?$/i.test(key)) return false;
+  return key.length >= 3 && key.length <= 24;
+}
+
 export async function listHqRooms(): Promise<GraphRoom[]> {
   const data = await graphJson<{ value?: PlaceRow[] }>("/places/microsoft.graph.room?$top=80");
   return (data.value || [])
     .filter((row) => {
       if (!row.displayName || !row.emailAddress) return false;
-      return /negt_hq|negt hq/i.test(row.building || "");
+      if (!/negt_hq|negt hq/i.test(row.building || "")) return false;
+      return isGuestBookableRoom(row.displayName, row.floorLabel || "");
     })
     .map((row) => ({
       name: row.displayName as string,
       email: row.emailAddress as string,
       capacity: row.capacity ?? null,
-      floor: row.floorLabel || row.building || "",
+      floor: row.floorLabel || "Ground floor",
       available: true,
     }));
 }
@@ -585,6 +657,9 @@ export async function bookGuestRoom(input: {
 }): Promise<RoomBooking> {
   if (input.start.getTime() < Date.now() - 30_000) {
     throw new Error("Room bookings cannot be in the past.");
+  }
+  if (!isGuestBookableRoom(input.roomName)) {
+    throw new Error("Guest Management only books ground-floor city rooms.");
   }
   const organizer = (input.organizerEmail || mailbox()).trim() || mailbox();
   const rooms = await listHqRooms();

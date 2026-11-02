@@ -1,27 +1,30 @@
 import { notFound, redirect } from "next/navigation";
-import { decideStaffRequestAction } from "@/app/actions";
 import { ArrangementPill } from "@/components/arrangement-status";
-import { FormBusy } from "@/components/form-busy";
+import { StaffRequestForm, type StaffRequestEdit } from "@/components/staff-request-form";
 import { StatusPill, TypeTag } from "@/components/status";
-import { Button, Card, PageHeader, Textarea } from "@/components/ui";
+import { Button, Card, PageHeader } from "@/components/ui";
 import { arrangementHint } from "@/lib/arrangement-types";
 import { requireSession } from "@/lib/auth";
 import { GUEST_KIND_LABEL, type GuestKind } from "@/lib/constants";
 import { fmtDateTime } from "@/lib/format";
 import { canSeeAllVisits } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
+import { listRoomInvitePeople, parseStoredInvitees } from "@/lib/room-booking";
+import { guestDocHref, parseGuestDocs } from "@/lib/guest-doc-types";
+import { canEditStaffRequest } from "@/lib/staff-request";
+import { timeStamp, todayStamp } from "@/lib/visit-schedule";
 
 export default async function StaffRequestDetailPage({
   params,
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; saved?: string }>;
 }) {
   const session = await requireSession();
   if (!session) return null;
   const { id } = await params;
-  const { error } = await searchParams;
+  const { error, saved } = await searchParams;
   const visit = await prisma.visit.findUnique({
     where: { id },
     include: {
@@ -40,7 +43,47 @@ export default async function StaffRequestDetailPage({
   if (!allowed) redirect("/request");
 
   const kind = (visit.guestKind || "GUEST") as GuestKind;
-  const canDecide = visit.status === "MANAGER_REVIEW" && (visit.lineManagerId === session.id || session.role === "SYSTEM_ADMIN");
+  const canEdit = canEditStaffRequest(session, visit);
+  const [departments, people] = canEdit
+    ? await Promise.all([
+        prisma.department.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
+        listRoomInvitePeople(),
+      ])
+    : [[], []];
+  const edit: StaffRequestEdit | null = canEdit
+    ? {
+        id: visit.id,
+        visitDate: todayStamp(visit.expectedArrival),
+        arrivalTime: timeStamp(visit.expectedArrival),
+        departmentId: visit.departmentId,
+        guestKind: visit.guestKind || "GUEST",
+        tourType: visit.tourType || "NONE",
+        meetingRoom: visit.meetingRoom || "",
+        purpose: visit.purpose,
+        driverRequired: visit.driverRequired,
+        gatePassRequired: visit.gatePassRequired,
+        giftRequired: visit.giftRequired,
+        giftType: visit.giftType || "",
+        guests: visit.visitors.map((link) => ({
+          fullName: link.visitor.fullName,
+          mobile:
+            link.visitor.mobile.startsWith("pending:") || link.visitor.mobile.startsWith("inbox:")
+              ? ""
+              : link.visitor.mobile,
+          email: link.visitor.email || "",
+          company: link.visitor.company || "",
+          jobTitle: link.visitor.jobTitle || "",
+          nationality: link.visitor.nationality || "",
+        })),
+        invitees: parseStoredInvitees(visit.colleagueInvitees),
+        docs: parseGuestDocs(visit.attachmentsJson).map((doc) => ({
+          type: doc.type,
+          name: doc.name,
+          href: guestDocHref(visit.id, doc.type),
+        })),
+      }
+    : null;
+  const docs = parseGuestDocs(visit.attachmentsJson);
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -51,7 +94,7 @@ export default async function StaffRequestDetailPage({
           <div className="flex items-center gap-2">
             <TypeTag>{GUEST_KIND_LABEL[kind]}</TypeTag>
             <StatusPill status={visit.status} />
-            <Button href={canDecide ? "/request?tab=approve" : "/request?tab=history"} variant="secondary">
+            <Button href="/request?tab=history" variant="secondary">
               Back
             </Button>
           </div>
@@ -61,6 +104,26 @@ export default async function StaffRequestDetailPage({
         <p className="mb-4 rounded-md border border-[#ead8d8] bg-[var(--tint-peach)] px-3 py-2 text-[13px] text-[var(--brand-ink)]">
           {error}
         </p>
+      ) : null}
+      {saved ? (
+        <p className="mb-4 rounded-md border border-[#d7e6da] bg-[var(--tint-sage)] px-3 py-2 text-[13px]">Changes saved.</p>
+      ) : null}
+
+      {edit ? (
+        <Card className="mb-4">
+          <h2 className="text-sm font-semibold">Edit request</h2>
+          <p className="mt-1 mb-4 text-[13px] text-[var(--muted)]">
+            Change any detail. Saving sends the updated request to reception.
+          </p>
+          <StaffRequestForm
+            departments={departments.map((item) => ({ value: item.id, label: item.name }))}
+            departmentId={visit.departmentId}
+            today={todayStamp()}
+            people={people}
+            bookerEmail={visit.createdBy.email}
+            edit={edit}
+          />
+        </Card>
       ) : null}
 
       <div className="mb-4 grid gap-3 sm:grid-cols-3">
@@ -81,15 +144,22 @@ export default async function StaffRequestDetailPage({
         <Card tone="sage">
           <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--faint)]">Next</div>
           <div className="mt-1 text-[13px] font-medium">
-            {visit.status === "MANAGER_REVIEW"
-              ? visit.lineManager?.name || "Line manager"
-              : visit.status === "INTAKE"
-                ? "Administration"
-                : visit.meetingRoom || "—"}
+            {visit.meetingRoom || "N/A"}
           </div>
-          <div className="text-[12px] text-[var(--muted)]">{visit.meetingRoom || "Room not set"}</div>
+          <div className="text-[12px] text-[var(--muted)]">
+            {visit.meetingRoom ? "Proposed room" : "Reception will assign the room"}
+          </div>
         </Card>
       </div>
+
+      {parseStoredInvitees(visit.colleagueInvitees).length ? (
+        <Card className="mb-4">
+          <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--faint)]">NEWEAST invitees</div>
+          <p className="mt-1 text-[13px]">
+            {parseStoredInvitees(visit.colleagueInvitees).map((person) => person.name).join(", ")}
+          </p>
+        </Card>
+      ) : null}
 
       {visit.driverRequired || visit.giftRequired || visit.gatePassRequired ? (
         <div className="mb-4 grid gap-3 sm:grid-cols-2">
@@ -101,10 +171,8 @@ export default async function StaffRequestDetailPage({
               </div>
               <p className="mt-2 text-[13px] text-[var(--muted)]">
                 {visit.driverStatus === "DONE"
-                  ? "Reception contacted the driver and confirmed the trip."
-                  : visit.status === "MANAGER_REVIEW"
-                    ? "After approval, Reception will contact the driver."
-                    : "Reception will contact the driver and confirm."}
+                  ? "The driver is confirmed."
+                  : "Sachini will contact the driver and confirm."}
               </p>
               {visit.driverNote ? <p className="mt-2 whitespace-pre-wrap text-[13px]">{visit.driverNote}</p> : null}
             </Card>
@@ -121,9 +189,7 @@ export default async function StaffRequestDetailPage({
                   ? "Reception received the gift."
                   : visit.giftStatus === "PREPARING"
                     ? "Marketing approved. The gift is being prepared."
-                    : visit.status === "MANAGER_REVIEW"
-                      ? "After approval, Marketing will review this gift."
-                      : "Marketing will review this gift."}
+                    : "Marketing will review this gift."}
               </p>
               {visit.giftNote ? <p className="mt-2 whitespace-pre-wrap text-[13px]">{visit.giftNote}</p> : null}
             </Card>
@@ -136,14 +202,17 @@ export default async function StaffRequestDetailPage({
               </div>
               <p className="mt-1 text-[13px] text-[var(--muted)]">
                 {visit.gatePassStatus === "DONE"
-                  ? "Reception has the gate pass."
+                  ? "Reception uploaded the gate pass."
                   : visit.gatePassStatus === "PREPARING"
-                    ? "HR approved. The gate pass is being prepared."
-                    : visit.status === "MANAGER_REVIEW"
-                      ? "After approval, HR will review this gate pass."
-                      : "HR will review this gate pass."}
+                    ? "Reception approved the gate pass and will upload it when it is ready."
+                    : "Reception will review this gate pass."}
               </p>
               {visit.gatePassNote ? <p className="mt-2 whitespace-pre-wrap text-[13px]">{visit.gatePassNote}</p> : null}
+              {visit.gatePassStatus === "DONE" && visit.gatePassFile ? (
+                <a className="mt-2 inline-block text-[13px] font-medium text-[var(--brand-ink)]" href={`/api/gate-passes/${visit.id}`}>
+                  Open gate pass
+                </a>
+              ) : null}
             </Card>
           ) : null}
         </div>
@@ -159,7 +228,7 @@ export default async function StaffRequestDetailPage({
         <ul className="mt-3 space-y-3">
           {visit.visitors.map((link) => {
             const guest = link.visitor;
-            const mobile = guest.mobile.startsWith("inbox:") ? "" : guest.mobile;
+            const mobile = guest.mobile.startsWith("inbox:") || guest.mobile.startsWith("pending:") ? "" : guest.mobile;
             const extra = [guest.jobTitle, guest.company, guest.nationality].filter(Boolean).join(" · ");
             return (
               <li key={link.id} className="rounded-xl border border-[var(--line)] bg-[#fcfafa] px-3 py-2">
@@ -174,38 +243,25 @@ export default async function StaffRequestDetailPage({
         </ul>
       </Card>
 
-      {visit.intakeNotes && !canDecide ? (
-        <Card className="mb-4" tone="mint">
-          <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--faint)]">Comment</div>
-          <p className="mt-1 whitespace-pre-wrap text-[13px]">{visit.intakeNotes}</p>
+      {docs.length && !canEdit ? (
+        <Card className="mb-4">
+          <h2 className="text-sm font-semibold">Documents</h2>
+          <ul className="mt-3 space-y-2">
+            {docs.map((doc) => (
+              <li key={doc.type}>
+                <a className="text-[13px] font-medium text-[var(--brand-ink)]" href={guestDocHref(visit.id, doc.type)}>
+                  {doc.type === "PASSPORT" ? "Passport" : doc.type === "VISA" ? "Visa" : "ID"} · {doc.name}
+                </a>
+              </li>
+            ))}
+          </ul>
         </Card>
       ) : null}
 
-      {canDecide ? (
-        <Card tone="sand">
-          <h2 className="text-sm font-semibold">Your decision</h2>
-          <p className="mt-1 text-[13px] text-[var(--muted)]">Add a comment, then approve or decline.</p>
-          <form action={decideStaffRequestAction} className="mt-4 space-y-3">
-            <FormBusy label="Saving decision…" />
-            <input type="hidden" name="visitId" value={visit.id} />
-            <Textarea name="note" placeholder="Comment" />
-            <div className="flex gap-2">
-              <button
-                name="decision"
-                value="APPROVED"
-                className="inline-flex h-8 items-center rounded-md border border-[var(--brand)] bg-[var(--brand-soft)] px-3 text-[12px] font-medium text-[var(--brand-ink)]"
-              >
-                Approve
-              </button>
-              <button
-                name="decision"
-                value="REJECTED"
-                className="inline-flex h-8 items-center rounded-md border border-[var(--line)] bg-white px-3 text-[12px] font-medium"
-              >
-                Decline
-              </button>
-            </div>
-          </form>
+      {visit.intakeNotes ? (
+        <Card className="mb-4" tone="mint">
+          <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--faint)]">Comment</div>
+          <p className="mt-1 whitespace-pre-wrap text-[13px]">{visit.intakeNotes}</p>
         </Card>
       ) : null}
     </div>

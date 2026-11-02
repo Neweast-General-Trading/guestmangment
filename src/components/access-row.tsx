@@ -51,9 +51,8 @@ export function AccessRow({
         </select>
       </label>
       <label className="block">
-        <span className="mb-1 block text-[11px] text-[var(--faint)] md:hidden">Access</span>
-        <select name="accessGroup" className={inputClass} defaultValue={person.accessGroup || ""}>
-          <option value="">No access</option>
+        <span className="mb-1 block text-[11px] text-[var(--faint)] md:hidden">Desk</span>
+        <select name="accessGroup" className={inputClass} defaultValue={person.accessGroup || "EMPLOYEE"}>
           {ACCESS_GROUPS.map((item) => (
             <option key={item} value={item}>
               {ACCESS_GROUP_LABEL[item]}

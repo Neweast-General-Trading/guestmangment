@@ -59,7 +59,7 @@ export default async function IntakePage({
   ].sort((a, b) => b.at - a.at);
   const counts = {
     intake: visits.filter((item) => item.status === "INTAKE").length,
-    escalated: visits.filter((item) => item.status === "ESCALATED").length,
+    escalated: visits.filter((item) => item.tourType === "BUILDING" && item.tourStatus === "PENDING").length,
     rooms: inbox.rooms.length,
   };
   const template = guestRequestTemplate();
@@ -94,7 +94,7 @@ export default async function IntakePage({
 
       <div className="mb-5 grid gap-3 sm:grid-cols-3">
         <Stat icon={Inbox} label="New intake" value={counts.intake} />
-        <Stat icon={ShieldAlert} label="With Samir" value={counts.escalated} />
+        <Stat icon={ShieldAlert} label="Building tours" value={counts.escalated} />
         <Stat icon={MailOpen} label="Room replies" value={counts.rooms} />
       </div>
 

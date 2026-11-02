@@ -2,8 +2,10 @@ import { RoomsBoard } from "@/components/rooms-board";
 import { Card, PageHeader } from "@/components/ui";
 import { requireSession } from "@/lib/auth";
 import { attachGuestEvents, guestMailbox, graphConfigured, roomsDaySchedule } from "@/lib/graph";
-import { canManageIntake } from "@/lib/permissions";
-import { flushRoomConfirmReplies, listRoomInvitePeople, roomBoardEvents } from "@/lib/room-booking";
+import { isRoomBooker, isRoomsViewer } from "@/lib/access";
+import { canManageIntake, homeFor } from "@/lib/permissions";
+import { prisma } from "@/lib/prisma";
+import { flushRoomConfirmReplies, listRoomDeskVisits, listRoomInvitePeople, roomBoardEvents } from "@/lib/room-booking";
 import { redirect } from "next/navigation";
 
 function dubaiToday() {
@@ -22,13 +24,19 @@ export default async function RoomsPage({
 }) {
   const session = await requireSession();
   if (!session) return null;
-  if (!canManageIntake(session.role)) redirect("/dashboard");
+  const roomBooker = isRoomBooker(session.email);
+  const manage = canManageIntake(session.role) || roomBooker;
+  if (!manage && !isRoomsViewer(session.email)) redirect(homeFor(session.role));
   const query = await searchParams;
   const date = /^\d{4}-\d{2}-\d{2}$/.test(query.date || "") ? (query.date as string) : dubaiToday();
 
   let rooms: Awaited<ReturnType<typeof roomsDaySchedule>> = [];
   let events: Awaited<ReturnType<typeof roomBoardEvents>> = [];
   let people: Awaited<ReturnType<typeof listRoomInvitePeople>> = [];
+  const [deskVisits, departments] = await Promise.all([
+    listRoomDeskVisits(),
+    prisma.department.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
+  ]);
   let loadError = "";
   if (!graphConfigured()) {
     loadError = "Outlook is not configured.";
@@ -49,8 +57,12 @@ export default async function RoomsPage({
   return (
     <div>
       <PageHeader
-        title="Meeting rooms"
-        description="Click a green slot to fill the booking card. You are the Outlook organizer. Add people who should receive the meeting on their calendars. When the room accepts, guest@ emails everyone on the booking."
+        title={roomBooker && !canManageIntake(session.role) ? "Room booking" : "Meeting rooms"}
+        description={
+          manage
+            ? "Room availability on the left. Visitor Book is an immediate reception booking. Employee requests sit underneath. Meetings stay in the side list, newest first."
+            : "Room availability and the meetings booked in each hall."
+        }
       />
       {query.error ? (
         <p className="mb-4 rounded-md border border-[#ead8d8] bg-[var(--tint-peach)] px-3 py-2 text-[13px] text-[var(--brand-ink)]">
@@ -59,12 +71,12 @@ export default async function RoomsPage({
       ) : null}
       {query.booked ? (
         <p className="mb-4 rounded-md border border-[#d7e6da] bg-[var(--tint-sage)] px-3 py-2 text-[13px]">
-          Room booked on your Outlook calendar. Invitees receive the meeting. When the room accepts, {guestMailbox()} emails everyone on the booking.
+          Room booked. When the room confirms, {guestMailbox()} emails the requester, invited colleagues, and the administration contact for this visit. Guests are not invited.
         </p>
       ) : null}
       {query.cancelled ? (
         <p className="mb-4 rounded-md border border-[#d7e6da] bg-[var(--tint-sage)] px-3 py-2 text-[13px]">
-          Booking cancelled.
+          Booking cancelled. Everyone on the booking was emailed.
         </p>
       ) : null}
       {loadError ? (
@@ -76,7 +88,17 @@ export default async function RoomsPage({
           <p className="text-sm">No HQ rooms came back from Outlook.</p>
         </Card>
       ) : (
-        <RoomsBoard date={date} rooms={rooms} events={events} mailbox={guestMailbox()} bookerEmail={session.email} people={people} />
+        <RoomsBoard
+          date={date}
+          rooms={rooms}
+          events={events}
+          mailbox={guestMailbox()}
+          bookerEmail={session.email}
+          people={people}
+          deskVisits={manage ? deskVisits : []}
+          departments={departments}
+          manage={manage}
+        />
       )}
     </div>
   );

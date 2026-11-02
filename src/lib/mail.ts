@@ -134,7 +134,7 @@ function guestLine(guest: ConfirmGuest) {
 }
 
 export async function sendRoomConfirmEmail(input: {
-  to: string;
+  to: string | string[];
   subject: string;
   date: string;
   start: string;
@@ -311,6 +311,61 @@ export async function sendStaffRoomHoldEmail(input: {
           ? "You can treat this as locked in Outlook. If plans change, cancel it from Meeting rooms."
           : "You can book another room or time from Meeting rooms."
       }</p>
+    </div>
+    <div style="padding:18px 28px 24px;color:#8a9290;font-size:12px;line-height:1.5;">This message was sent automatically from guest@neweast.co. Please do not reply.</div>
+  </div>
+</body></html>`,
+  });
+}
+
+export async function sendBookingChangeEmail(input: {
+  to: string;
+  name: string;
+  kind: "cancelled" | "updated";
+  room: string;
+  date: string;
+  start: string;
+  end: string;
+  subject: string;
+  reason?: string;
+}) {
+  const cancelled = input.kind === "cancelled";
+  const hello = `Hello ${greetFirstName(input.name)},`;
+  const when = `${input.date} · ${input.start} – ${input.end}`;
+  const heading = cancelled ? "This meeting was cancelled" : "This meeting was updated";
+  const intro = cancelled
+    ? "The booking was cancelled. Please ignore the earlier invitation and take it off your calendar."
+    : "The booking was changed. Please use the details below.";
+  const reason = input.reason?.trim() || "";
+  const details: Array<[string, string]> = [
+    ["Room", input.room],
+    ["When", when],
+    ["Subject", input.subject],
+  ];
+  if (reason) details.push([cancelled ? "Reason" : "Note", reason]);
+  const text = [hello, "", intro, "", ...details.map(([label, value]) => `${label}: ${value}`), "", "This message was sent automatically. Please do not reply."].join("\n");
+  const rows = details
+    .map(
+      ([label, value], index) =>
+        `<tr><td style="padding:12px 16px;color:#6b7572;font-size:13px;width:34%;vertical-align:top;${index ? "border-top:1px solid #e3e8e6;" : ""}">${esc(label)}</td><td style="padding:12px 16px;text-align:right;font-weight:600;font-size:14px;${index ? "border-top:1px solid #e3e8e6;" : ""}">${esc(value).replaceAll("\n", "<br>")}</td></tr>`,
+    )
+    .join("");
+  const tone = cancelled ? "#8a4b46" : "#9a6b20";
+  await sendOut({
+    to: input.to,
+    subject: `${cancelled ? "Cancelled" : "Updated"} · ${input.room} · ${input.date} · ${input.start}–${input.end}`,
+    text,
+    html: `<!DOCTYPE html>
+<html><body style="margin:0;background:#f4f6f5;font-family:Arial,Helvetica,sans-serif;color:#1b1f1e;">
+  <div style="max-width:560px;margin:28px auto;background:#fff;border:1px solid #e3e8e6;border-radius:16px;overflow:hidden;">
+    <div style="background:${tone};padding:22px 28px 20px;">
+      <div style="color:#f3e4df;font-size:11px;letter-spacing:0.16em;font-weight:700;">NEWEAST HEADQUARTERS</div>
+      <h1 style="margin:8px 0 0;font-size:22px;line-height:1.3;color:#fff;font-weight:600;">${esc(heading)}</h1>
+    </div>
+    <div style="padding:26px 28px 8px;">
+      <p style="margin:0 0 10px;font-size:15px;color:#1b1f1e;">${esc(hello)}</p>
+      <p style="margin:0 0 20px;font-size:15px;line-height:1.55;color:#4b5552;">${esc(intro)}</p>
+      <table style="width:100%;border-collapse:collapse;background:#f7faf9;border:1px solid #e3e8e6;border-radius:12px;">${rows}</table>
     </div>
     <div style="padding:18px 28px 24px;color:#8a9290;font-size:12px;line-height:1.5;">This message was sent automatically from guest@neweast.co. Please do not reply.</div>
   </div>

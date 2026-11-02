@@ -4,14 +4,16 @@ import { useState } from "react";
 import { useFormStatus } from "react-dom";
 import {
   confirmIntakeAction,
-  escalateIntakeAction,
   saveIntakeAction,
   submitIntakeAction,
 } from "@/app/actions";
 import { SearchSelect } from "@/components/search-select";
 import { RoomSelect, type RoomOption } from "@/components/room-select";
 import { FormBusy } from "@/components/form-busy";
+import { TourField } from "@/components/tour-field";
+import { GuestDocFields } from "@/components/guest-doc-fields";
 import { Button, Field, TextInput, Textarea, inputClass } from "@/components/ui";
+import type { GuestDocType } from "@/lib/guest-doc-types";
 import { GUEST_KINDS } from "@/lib/constants";
 import { emptyVisitor, type ParsedVisitor } from "@/lib/email-template";
 
@@ -29,8 +31,9 @@ export type IntakeFormVisit = {
   driverMobile: string;
   driverVehicle: string;
   visitors: ParsedVisitor[];
-  canEscalate: boolean;
+  tourType?: string | null;
   locked: boolean;
+  docs?: { type: GuestDocType; name: string; href: string }[];
 };
 
 export function IntakeForm({
@@ -52,7 +55,7 @@ export function IntakeForm({
   );
 
   return (
-    <form className="space-y-5">
+    <form className="space-y-5" encType="multipart/form-data">
       <FormBusy label="Updating request…" />
       <input type="hidden" name="visitId" value={visit.id} />
       <input type="hidden" name="visitorCount" value={visitors.length} />
@@ -85,6 +88,7 @@ export function IntakeForm({
           <Field label="Meeting room" required>
             <RoomSelect defaultValue={visit.meetingRoom} date={visitDate} time={arrival} disabled={visit.locked} required rooms={rooms} />
           </Field>
+          <TourField defaultValue={visit.tourType} />
         </div>
         <div className="mt-4">
           <Field label="Purpose" required>
@@ -117,8 +121,8 @@ export function IntakeForm({
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
                 <TextInput name={`visitor_${index}_fullName`} placeholder="Full name" defaultValue={visitor.fullName} required disabled={visit.locked} />
-                <TextInput name={`visitor_${index}_mobile`} placeholder="Mobile" defaultValue={visitor.mobile} required disabled={visit.locked} />
-                <TextInput name={`visitor_${index}_email`} placeholder="Email" defaultValue={visitor.email} disabled={visit.locked} />
+                <TextInput name={`visitor_${index}_mobile`} placeholder="Optional" defaultValue={visitor.mobile} disabled={visit.locked} />
+                <TextInput name={`visitor_${index}_email`} placeholder="Optional" defaultValue={visitor.email} disabled={visit.locked} />
                 <TextInput name={`visitor_${index}_company`} placeholder="Company" defaultValue={visitor.company} disabled={visit.locked} />
                 <TextInput name={`visitor_${index}_jobTitle`} placeholder="Job title" defaultValue={visitor.jobTitle} disabled={visit.locked} />
                 <TextInput name={`visitor_${index}_nationality`} placeholder="Nationality" defaultValue={visitor.nationality} disabled={visit.locked} />
@@ -127,6 +131,8 @@ export function IntakeForm({
           ))}
         </div>
       </section>
+
+      <GuestDocFields docs={visit.docs || []} disabled={visit.locked} />
 
       <section className="rounded-2xl border border-[var(--line)] bg-white p-5">
         <h2 className="text-sm font-semibold">Driver</h2>
@@ -153,19 +159,11 @@ export function IntakeForm({
         <section className="rounded-2xl border border-[var(--line)] bg-white p-5">
           <h2 className="text-sm font-semibold">Actions</h2>
           <p className="mt-1 text-[12px] text-[var(--muted)]">
-            Confirm sets the room and driver. Submit sends the visit to the security desk. Customer requests can go to Samir first.
+            Confirm sets the room and driver. Submit sends the visit to the security desk. Building Tour waits for Salma Moufallah.
           </p>
-          {visit.canEscalate ? (
-            <div className="mt-3">
-              <Textarea name="escalationNotes" placeholder="Note for Samir (optional)" />
-            </div>
-          ) : null}
           <div className="mt-4 flex flex-wrap gap-2">
             <IntakeAction label="Save" working="Saving…" variant="secondary" formAction={saveIntakeAction} />
             <IntakeAction label="Confirm" working="Confirming…" formAction={confirmIntakeAction} />
-            {visit.canEscalate ? (
-              <IntakeAction label="Escalation" working="Sending…" variant="secondary" formAction={escalateIntakeAction} />
-            ) : null}
             <IntakeAction label="Submit to Security" working="Submitting…" formAction={submitIntakeAction} />
           </div>
         </section>

@@ -196,6 +196,8 @@ export async function syncPayrollEmployees() {
 
   for (const preset of APPROVER_PRESETS) {
     if (!("email" in preset) || !preset.email) continue;
+    const email = preset.email.toLowerCase();
+    if (email !== "sakour@neweast.co" && email !== "samir.ibrahim@neweast.co" && email !== "samir.ibrahim@neweast.com") continue;
     const user = byEmail.get(preset.email) ?? byEmail.get(EMAIL_ALIASES[preset.email] ?? "");
     if (!user) continue;
     const current = await prisma.user.findUnique({ where: { id: user.id }, select: { role: true } });
@@ -256,24 +258,6 @@ export async function syncPayrollEmployees() {
 }
 
 export async function ensureHqLogins() {
-  const admin = await prisma.user.findUnique({ where: { email: "adminsatror@neweast.co" } });
-  if (!admin) {
-    await prisma.user.create({
-      data: {
-        email: "adminsatror@neweast.co",
-        passwordHash: await hashPassword(""),
-        name: "System Administrator",
-        role: "SYSTEM_ADMIN",
-        isActive: true,
-      },
-    });
-  } else {
-    await prisma.user.update({
-      where: { id: admin.id },
-      data: { role: "SYSTEM_ADMIN", name: "System Administrator", isActive: true },
-    });
-  }
-
   const guard = await prisma.user.findUnique({ where: { email: "security@neweast.co" } });
   if (!guard) {
     await prisma.user.create({
@@ -296,7 +280,7 @@ export async function ensureHqLogins() {
   if (sakour) {
     await prisma.user.update({
       where: { id: sakour.id },
-      data: { role: "SYSTEM_ADMIN", isActive: true },
+      data: { role: "SYSTEM_ADMIN", isActive: true, accessGroup: "IT" },
     });
   }
 
@@ -308,19 +292,11 @@ export async function ensureHqLogins() {
     });
   }
 
-  const mais = await prisma.user.findUnique({ where: { email: "mais.alhamwi@neweast.com" } });
-  if (mais) {
-    await prisma.user.update({
-      where: { id: mais.id },
-      data: { role: "HR_ADMIN", isActive: true, passwordHash: await hashPassword("") },
-    });
-  }
-
   const guru = await prisma.user.findUnique({ where: { email: "guru@neweast.co" } });
   if (guru) {
     await prisma.user.update({
       where: { id: guru.id },
-      data: { role: "SYSTEM_ADMIN", isActive: true, passwordHash: await hashPassword("") },
+      data: { role: "SYSTEM_ADMIN", isActive: true, accessGroup: "IT" },
     });
   }
 }

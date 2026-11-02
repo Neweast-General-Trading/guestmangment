@@ -1,5 +1,5 @@
 export const GIFT_OWNER_EMAIL = (process.env.GIFT_OWNER_EMAIL || "jesman@neweast.co").trim().toLowerCase();
-export const GATE_PASS_OWNER_EMAIL = (process.env.GATE_PASS_OWNER_EMAIL || "navami.balachandran@neweast.co").trim().toLowerCase();
+export const GATE_PASS_OWNER_EMAIL = (process.env.GATE_PASS_OWNER_EMAIL || "frontdesk@neweast.com").trim().toLowerCase();
 
 export const GIFT_TYPES = [
   "Welcome gift",

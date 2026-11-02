@@ -58,7 +58,7 @@ export async function assignStaffParking(
   userId: string,
   vehicle: { plate?: string; vehicleType?: string | null; plates?: string[]; types?: Array<string | null | undefined> },
 ) {
-  if (!canAssignStaffParking(actor.role)) throw new Error("Only Administration can assign parking.");
+  if (!canAssignStaffParking(actor.role, actor.email)) throw new Error("Only Administration can assign parking.");
   const code = remapLegacyParkingSlot(slot);
   if (!isParkingSlot(code)) throw new Error("Choose a parking bay from Zone A, B, C, or D.");
   const vehicles = requireParkingVehicles(vehicle.plates?.length ? vehicle.plates : [vehicle.plate || ""], vehicle.types?.length ? vehicle.types : [vehicle.vehicleType]);
@@ -120,7 +120,7 @@ export async function assignStaffParking(
 }
 
 export async function releaseStaffParking(actor: SessionUser, slot: string) {
-  if (!canAssignStaffParking(actor.role)) throw new Error("Only Administration can assign parking.");
+  if (!canAssignStaffParking(actor.role, actor.email)) throw new Error("Only Administration can assign parking.");
   const code = remapLegacyParkingSlot(slot);
   const row = await prisma.parkingAssignment.findUnique({
     where: { slot: code },

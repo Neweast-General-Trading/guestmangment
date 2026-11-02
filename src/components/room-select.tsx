@@ -12,6 +12,8 @@ export function RoomSelect({
   time,
   disabled,
   required,
+  allowNone = false,
+  keepBooked = "",
   rooms: initialRooms = [],
 }: {
   name?: string;
@@ -20,6 +22,8 @@ export function RoomSelect({
   time: string;
   disabled?: boolean;
   required?: boolean;
+  allowNone?: boolean;
+  keepBooked?: string;
   rooms?: RoomOption[];
 }) {
   const [value, setValue] = useState(defaultValue);
@@ -40,17 +44,24 @@ export function RoomSelect({
       .finally(() => setLoading(false));
   }, [date, time, initialRooms.length]);
 
+  useEffect(() => {
+    if (value === "N/A") return;
+    const picked = rooms.find((room) => room.name === value);
+    if (picked && !picked.available && picked.name !== keepBooked) setValue(allowNone ? "N/A" : "");
+  }, [rooms, value, keepBooked, allowNone]);
+
   return (
     <select name={name} value={value} onChange={(event) => setValue(event.target.value)} className={inputClass} disabled={disabled} required={required}>
       <option value="">{loading && !rooms.length ? "Loading rooms…" : "Select a room"}</option>
-      {rooms.map((room) => (
-        <option key={room.name} value={room.name}>
-          {room.name}
-          {room.capacity ? ` · ${room.capacity}` : ""}
-          {room.floor ? ` · ${room.floor}` : ""}
-          {room.available ? " · Free" : " · Busy"}
-        </option>
-      ))}
+      {allowNone ? <option value="N/A">N/A</option> : null}
+      {rooms.map((room) => {
+        const open = room.available || room.name === keepBooked;
+        return (
+          <option key={room.name} value={open ? room.name : ""} disabled={!open}>
+            {open ? room.name : `${room.name} · Already Booked`}
+          </option>
+        );
+      })}
     </select>
   );
 }

@@ -152,11 +152,17 @@ model Visit {
   gatePassRequired    Boolean        @default(false)
   gatePassStatus      String?
   gatePassNote        String?
+  gatePassFile        String?
+  supplierStatus      String?
   escalationNotes     String?
   intakeNotes           String?
   outlookEventId        String?
   outlookRoomEmail      String?
   roomConfirmRepliedAt  DateTime?
+  tourType              String?        @default("NONE")
+  tourStatus            String?
+  briefingSentAt        DateTime?
+  colleagueInvitees     String?        @default("[]")
   visitors            VisitVisitor[]
   vehicles            Vehicle[]
   approvals           Approval[]
@@ -395,7 +401,9 @@ model RoomHold {
   repliedAt       DateTime?
   bookerInvitedAt DateTime?
   bookerEventId   String?
+  pinnedAttendees String    @default("[]")
   cancelledAt     DateTime?
+  cancelReason    String?
   createdAt       DateTime  @default(now())
 
   @@index([bookedById])

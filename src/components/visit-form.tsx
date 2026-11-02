@@ -232,11 +232,11 @@ export function VisitForm({
             <Field label="Full name" required>
               <TextInput name={`visitor_${index}_fullName`} required defaultValue={visitor.fullName} />
             </Field>
-            <Field label="Mobile number" required>
-              <TextInput name={`visitor_${index}_mobile`} required defaultValue={visitor.mobile} />
+            <Field label="Mobile number">
+              <TextInput name={`visitor_${index}_mobile`} placeholder="Mobile" defaultValue={visitor.mobile} />
             </Field>
-            <Field label="Email" required>
-              <TextInput name={`visitor_${index}_email`} type="email" required defaultValue={visitor.email} />
+            <Field label="Email">
+              <TextInput name={`visitor_${index}_email`} type="email" placeholder="Email" defaultValue={visitor.email} />
             </Field>
             <Field label="Nationality">
               <TextInput name={`visitor_${index}_nationality`} defaultValue={visitor.nationality} />

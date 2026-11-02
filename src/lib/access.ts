@@ -1,3 +1,4 @@
+import { GATE_PASS_OWNER_EMAIL } from "./arrangement-types";
 import { ROLE_LABEL, ROLES, type Role } from "./constants";
 import { prisma } from "./prisma";
 
@@ -9,8 +10,23 @@ const FULL_ACCESS_EMAILS = new Set([
   "guru@neweast.com",
 ]);
 
+const ROOMS_VIEW_EMAILS = new Set(["maria@neweast.com", "carina@neweast.co", "hannah@neweast.co"]);
+const ROOM_BOOKING_EMAILS = new Set([
+  "sachini@neweast.com",
+  "sachini@neweast.co",
+  "sachinialwis1993@gmail.com",
+]);
+
 export function isFullAccess(email?: string | null) {
-  return FULL_ACCESS_EMAILS.has(email?.trim().toLowerCase() || "");
+  return FULL_ACCESS_EMAILS.has((email || "").trim().toLowerCase());
+}
+
+export function isRoomsViewer(email?: string | null) {
+  return ROOMS_VIEW_EMAILS.has((email || "").trim().toLowerCase());
+}
+
+export function isRoomBooker(email?: string | null) {
+  return ROOM_BOOKING_EMAILS.has((email || "").trim().toLowerCase());
 }
 
 const TRACKING_EMAILS = new Set([
@@ -23,24 +39,26 @@ export function canSeeTracking(email?: string | null) {
   return TRACKING_EMAILS.has(email?.trim().toLowerCase() || "");
 }
 
-export const ACCESS_GROUPS = ["BUSINESS_IT", "HR_ADMINISTRATION", "MANAGEMENT"] as const;
+export const ACCESS_GROUPS = ["ADMINISTRATION", "HR", "IT", "EMPLOYEE"] as const;
 export type AccessGroup = (typeof ACCESS_GROUPS)[number];
 
 export const ACCESS_GROUP_LABEL: Record<AccessGroup, string> = {
-  BUSINESS_IT: "Business & IT",
-  HR_ADMINISTRATION: "HR & Administration",
-  MANAGEMENT: "Management",
+  ADMINISTRATION: "Administration",
+  HR: "HR",
+  IT: "IT",
+  EMPLOYEE: "Employee",
 };
 
 export const ACCESS_GROUP_NATURE: Record<AccessGroup, string> = {
-  BUSINESS_IT: "Business Systems and IT staff who request and approve HQ visits",
-  HR_ADMINISTRATION: "HR, Administration, and Reception staff for guest visits",
-  MANAGEMENT: "Management who request visits and review the desk",
+  ADMINISTRATION: "Reception, general administration, and room bookings",
+  HR: "HR administration and the gate pass",
+  IT: "Super admin",
+  EMPLOYEE: "Submit a visit request",
 };
 
 export const ROLE_NATURE: Record<Role, string> = {
   EMPLOYEE: "Staff — submit visit requests",
-  DEPARTMENT_MANAGER: "Line manager — submit and approve",
+  DEPARTMENT_MANAGER: "Department manager — submit visit requests",
   HR_ADMIN: "Reception — intake and visit desk",
   SYSTEM_ADMIN: "Administration — full operations",
   MANAGEMENT: "Management — request, reports, and control",
@@ -53,30 +71,32 @@ export const ASSIGNABLE_ROLES = ["EMPLOYEE", "DEPARTMENT_MANAGER", "HR_ADMIN", "
 export const ACCESS_PAGE_SIZE = 20;
 export const ACCESS_PAGE_SIZES = [10, 20, 50, 100] as const;
 
-const BUSINESS_IT_DEPTS = new Set(["BUSINESS_SYSTEMS", "IT"]);
-const HR_ADMIN_DEPTS = new Set(["HR", "HR_ADMIN", "HR_ADMINISTRATION", "ADMINISTRATION"]);
-const MANAGEMENT_DEPTS = new Set(["MANAGEMENT", "EXEC"]);
-
 export function isAccessGroup(value: string | null | undefined): value is AccessGroup {
   return ACCESS_GROUPS.includes(value as AccessGroup);
 }
 
 export function accessGroupLabel(value: string | null | undefined) {
-  return isAccessGroup(value) ? ACCESS_GROUP_LABEL[value] : "No access";
+  return isAccessGroup(value) ? ACCESS_GROUP_LABEL[value] : "Employee";
+}
+
+export function accessDeskLabel(person: { email: string; role: string }) {
+  const email = person.email.trim().toLowerCase();
+  if (isFullAccess(email)) return "Super admin — full system and Access";
+  if (isRoomsViewer(email)) return "Rooms — see bookings and submit requests";
+  if (isRoomBooker(email)) return "Room booking and parking assign";
+  if (email === GATE_PASS_OWNER_EMAIL) return "Gate pass and visit requests";
+  if (person.role === "HR_ADMIN") return "Reception — intake and rooms";
+  if (person.role === "SYSTEM_ADMIN") return "Administration — visits, rooms, and reports";
+  if (person.role === "SECURITY_GUARD" || person.role === "SECURITY_SUPERVISOR") return "Guard desk";
+  return "Employee — submit visit requests";
 }
 
 export function canManageAccess(email?: string | null) {
   return isFullAccess(email);
 }
 
-export function inferAccessGroup(input: { role?: string | null; departmentCode?: string | null }) {
-  if (input.role === "MANAGEMENT") return "MANAGEMENT" as const;
-  if (input.role === "HR_ADMIN") return "HR_ADMINISTRATION" as const;
-  const code = input.departmentCode?.trim().toUpperCase() || "";
-  if (BUSINESS_IT_DEPTS.has(code)) return "BUSINESS_IT" as const;
-  if (HR_ADMIN_DEPTS.has(code)) return "HR_ADMINISTRATION" as const;
-  if (MANAGEMENT_DEPTS.has(code)) return "MANAGEMENT" as const;
-  return null;
+export function inferAccessGroup(_input?: { role?: string | null; departmentCode?: string | null }) {
+  return "EMPLOYEE" as const;
 }
 
 export function canUseRequestDesk(user: { role: string; email: string; accessGroup?: string | null }) {
@@ -129,9 +149,10 @@ export function accessHref(input: { group?: string; q?: string; page?: number; p
 
 export function accessListWhere(input: { group?: string; q?: string }) {
   const q = input.q?.trim() || "";
-  const group = input.group || "";
+  const group = isAccessGroup(input.group) ? input.group : "ADMINISTRATION";
   return {
     isActive: true,
+    accessGroup: group,
     ...(q
       ? {
           OR: [
@@ -141,11 +162,7 @@ export function accessListWhere(input: { group?: string; q?: string }) {
             { department: { name: { contains: q } } },
           ],
         }
-      : group === "none"
-        ? { OR: [{ accessGroup: null }, { accessGroup: "" }] }
-        : group
-          ? { accessGroup: group }
-          : { accessGroup: { in: [...ACCESS_GROUPS] } }),
+      : {}),
   };
 }
 

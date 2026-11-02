@@ -3,7 +3,9 @@ import { GATE_PASS_OWNER_EMAIL, GIFT_OWNER_EMAIL } from "./arrangement-types";
 import { prisma } from "./prisma";
 import { fmtDate, fmtTime } from "./format";
 import { notify, notifyRoles } from "./notify";
-import { canApproveGatePass, canApproveGift, canManageIntake, canSeeGifts, canSeePasses, type SessionUser } from "./permissions";
+import { isRoomBooker } from "./access";
+import { canApproveGatePass, canApproveGift, canCompleteDriver, canManageIntake, canSeeGifts, canSeePasses, type SessionUser } from "./permissions";
+import { saveGatePassFile } from "./gate-pass-file";
 
 type VisitParty = {
   id: string;
@@ -78,12 +80,21 @@ export async function startArrangements(visitId: string) {
 
   if (visit.driverRequired && !visit.driverStatus) {
     await prisma.visit.update({ where: { id: visitId }, data: { driverStatus: "PENDING" } });
-    await notifyRoles(["HR_ADMIN", "SYSTEM_ADMIN"], {
-      type: "DRIVER_NEEDED",
-      title: `Driver needed · ${visit.visitCode}`,
-      message: `${guest} · ${when}\nRequester: ${visit.createdBy.name}\nContact the driver, confirm the trip, add a note, and mark Done.`,
-      visitId,
+    const handlers = await prisma.user.findMany({
+      where: { isActive: true },
+      select: { id: true, email: true, name: true },
     });
+    const owner = handlers.find((person) => isRoomBooker(person.email));
+    if (owner) {
+      await notify({
+        userId: owner.id,
+        type: "DRIVER_NEEDED",
+        title: `Driver needed · ${visit.visitCode}`,
+        message: `Hello ${owner.name},\n\nA driver is requested for ${guest}.\nVisit: ${visit.visitCode}\nWhen: ${when}\nRequester: ${visit.createdBy.name}\nPurpose: ${visit.purpose}\n\nContact the driver, then confirm the trip.`,
+        visitId,
+        onBehalfOf: owner.name,
+      });
+    }
   }
 
   if (visit.giftRequired && !visit.giftStatus) {
@@ -110,7 +121,7 @@ export async function startArrangements(visitId: string) {
         userId: owner.id,
         type: "GATE_PASS_REQUEST",
         title: `Gate pass · ${visit.visitCode}`,
-        message: `Hello ${owner.name},\n\nA gate pass is required for visitor ${guest}.\nVisit: ${visit.visitCode}\nWhen: ${when}\nRequester: ${visit.createdBy.name}\nPurpose: ${visit.purpose}\n\nPlease approve so Reception can issue it at the gate.`,
+        message: `Hello ${owner.name},\n\nA gate pass is required for visitor ${guest}.\nVisit: ${visit.visitCode}\nWhen: ${when}\nRequester: ${visit.createdBy.name}\nPurpose: ${visit.purpose}\n\nApprove it, then upload the pass when it is ready.`,
         visitId,
         onBehalfOf: owner.name,
       });
@@ -119,7 +130,7 @@ export async function startArrangements(visitId: string) {
 }
 
 export async function markDriverDone(session: SessionUser, visitId: string, note: string) {
-  if (!canManageIntake(session.role)) throw new Error("Reception or Administration can complete this.");
+  if (!canCompleteDriver(session)) throw new Error("Sachini confirms driver requests.");
   const visit = await prisma.visit.findUnique({
     where: { id: visitId },
     include: { createdBy: true, visitors: { include: { visitor: true } } },
@@ -144,7 +155,7 @@ export async function markDriverDone(session: SessionUser, visitId: string, note
     userId: visit.createdById,
     type: "DRIVER_UPDATE",
     title: `Driver confirmed · ${visit.visitCode}`,
-    message: `Hello ${visit.createdBy.name},\n\nReception confirmed the driver for ${guestName(visit)} (${visit.visitCode}).\n${detail}`,
+    message: `Hello ${visit.createdBy.name},\n\nThe driver for ${guestName(visit)} (${visit.visitCode}) is confirmed.\n${detail}`,
     visitId,
     onBehalfOf: visit.createdBy.name,
   });
@@ -223,7 +234,7 @@ export async function markGiftDone(session: SessionUser, visitId: string, note: 
 }
 
 export async function approveGatePass(session: SessionUser, visitId: string, note: string) {
-  if (!canApproveGatePass(session)) throw new Error("HR can approve this gate pass.");
+  if (!canApproveGatePass(session)) throw new Error("Reception can approve this gate pass.");
   const visit = await prisma.visit.findUnique({
     where: { id: visitId },
     include: { createdBy: true, visitors: { include: { visitor: true } } },
@@ -248,20 +259,16 @@ export async function approveGatePass(session: SessionUser, visitId: string, not
     userId: visit.createdById,
     type: "GATE_PASS_UPDATE",
     title: `Gate pass preparing · ${visit.visitCode}`,
-    message: `Hello ${visit.createdBy.name},\n\nHR approved the gate pass for ${guestName(visit)} (${visit.visitCode}).\nStatus: Preparing`,
+    message: `Hello ${visit.createdBy.name},\n\nReception approved the gate pass for ${guestName(visit)} (${visit.visitCode}).\nStatus: Preparing. The file will be uploaded when it is ready.`,
     visitId,
     onBehalfOf: visit.createdBy.name,
   });
-  await notifyRoles(["HR_ADMIN", "SYSTEM_ADMIN"], {
-    type: "GATE_PASS_READY",
-    title: `Gate pass preparing · ${visit.visitCode}`,
-    message: `${guestName(visit)} · Gate pass\nHR approved. Mark Done when Reception has the pass.`,
-    visitId,
-  });
 }
 
-export async function markGatePassDone(session: SessionUser, visitId: string, note: string) {
-  if (!canManageIntake(session.role)) throw new Error("Reception or Administration can complete this.");
+export async function markGatePassDone(session: SessionUser, visitId: string, note: string, file?: File | null) {
+  if (!canManageIntake(session.role) && !canApproveGatePass(session)) {
+    throw new Error("Reception uploads the gate pass.");
+  }
   const visit = await prisma.visit.findUnique({
     where: { id: visitId },
     include: { createdBy: true, visitors: { include: { visitor: true } } },
@@ -269,12 +276,13 @@ export async function markGatePassDone(session: SessionUser, visitId: string, no
   if (!visit) throw new Error("Visit not found.");
   if (!visit.gatePassRequired) throw new Error("This visit did not request a gate pass.");
   if (visit.gatePassStatus !== "PREPARING" && visit.gatePassStatus !== "DONE") {
-    throw new Error("Wait for HR to approve the gate pass first.");
+    throw new Error("Approve the gate pass before uploading it.");
   }
-  const detail = note.trim() || `Received at Reception by ${session.name}.`;
+  const saved = await saveGatePassFile(visitId, file);
+  const detail = note.trim() || `Uploaded by ${session.name}.`;
   await prisma.visit.update({
     where: { id: visitId },
-    data: { gatePassStatus: "DONE", gatePassNote: detail },
+    data: { gatePassStatus: "DONE", gatePassNote: detail, gatePassFile: saved.name },
   });
   await addTimeline({ visitId, event: "Gate pass received", note: detail, userId: session.id });
   await writeAudit({
@@ -288,7 +296,7 @@ export async function markGatePassDone(session: SessionUser, visitId: string, no
     userId: visit.createdById,
     type: "GATE_PASS_UPDATE",
     title: `Gate pass ready · ${visit.visitCode}`,
-    message: `Hello ${visit.createdBy.name},\n\nReception has the gate pass for ${guestName(visit)} (${visit.visitCode}).\nStatus: Done`,
+    message: `Hello ${visit.createdBy.name},\n\nReception uploaded the gate pass for ${guestName(visit)} (${visit.visitCode}).\nStatus: Done`,
     visitId,
     onBehalfOf: visit.createdBy.name,
   });

@@ -6,6 +6,7 @@ import { normalizePlate, parkingMapLayout, parkingSlotMeta } from "./parking";
 assert.equal(canAssignStaffParking("SYSTEM_ADMIN"), true);
 assert.equal(canAssignStaffParking("HR_ADMIN"), false);
 assert.equal(canAssignStaffParking("EMPLOYEE"), false);
+assert.equal(canAssignStaffParking("EMPLOYEE", "sachini@neweast.com"), true);
 
 assert.equal(parkingSlotMeta("B49").zone, "B");
 assert.equal(parkingSlotMeta("B49").number, 49);

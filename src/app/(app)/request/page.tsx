@@ -2,18 +2,16 @@ import Link from "next/link";
 import { StaffRequestForm } from "@/components/staff-request-form";
 import { StatusPill, TypeTag } from "@/components/status";
 import { Card, Empty, PageHeader } from "@/components/ui";
-import { canUseRequestDesk } from "@/lib/access";
-import { arrangementHint } from "@/lib/arrangement-types";
+import { canUseRequestDesk, isRoomBooker } from "@/lib/access";
 import { requireSession } from "@/lib/auth";
 import { GUEST_KIND_LABEL, type GuestKind } from "@/lib/constants";
 import { fmtDateTime } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
-import { requesterLineManager } from "@/lib/staff-request";
+import { listRoomInvitePeople } from "@/lib/room-booking";
 import { todayStamp } from "@/lib/visit-schedule";
 
 const TABS = [
   { id: "new", label: "New request" },
-  { id: "approve", label: "Approve" },
   { id: "history", label: "History" },
 ] as const;
 
@@ -34,32 +32,25 @@ export default async function StaffRequestPage({
   const session = await requireSession();
   if (!session) return null;
   const query = await searchParams;
-  const [departments, manager, mine, waiting] = await Promise.all([
+  const [departments, people, mine] = await Promise.all([
     prisma.department.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
-    requesterLineManager(session),
+    listRoomInvitePeople(),
     prisma.visit.findMany({
       where: { source: "STAFF", createdById: session.id },
-      include: { visitors: { include: { visitor: true }, take: 1 }, department: true, lineManager: true },
+      include: { visitors: { include: { visitor: true }, take: 1 }, department: true },
       orderBy: { createdAt: "desc" },
       take: 80,
-    }),
-    prisma.visit.findMany({
-      where: { source: "STAFF", status: "MANAGER_REVIEW", lineManagerId: session.id },
-      include: { visitors: { include: { visitor: true } }, department: true, createdBy: true },
-      orderBy: { createdAt: "desc" },
-      take: 50,
     }),
   ]);
 
   const canDesk = canUseRequestDesk(session);
-  const requested = query.tab === "approve" || query.tab === "history" || query.tab === "new" ? query.tab : null;
-  const tab: Tab = requested || (canDesk ? "new" : "approve");
+  const tab: Tab = query.tab === "history" || !canDesk ? "history" : "new";
 
   return (
     <div className="mx-auto max-w-3xl">
       <PageHeader
         title="Visit request"
-        description="Submit a guest visit, approve your team’s requests, and follow your history."
+        description="Submit a guest visit. It goes straight to reception. Open a request to edit every detail."
       />
       {query.error ? (
         <p className="mb-4 rounded-md border border-[#ead8d8] bg-[var(--tint-peach)] px-3 py-2 text-[13px] text-[var(--brand-ink)]">
@@ -68,14 +59,29 @@ export default async function StaffRequestPage({
       ) : null}
       {query.sent ? (
         <p className="mb-4 rounded-md border border-[#d7e6da] bg-[var(--tint-sage)] px-3 py-2 text-[13px]">
-          {query.sent} sent{query.manager ? ` to ${query.manager}` : " to Administration"}.
+          {query.sent} sent to reception.
         </p>
       ) : null}
-      {query.decided ? (
-        <p className="mb-4 rounded-md border border-[#d7e6da] bg-[var(--tint-sage)] px-3 py-2 text-[13px]">Decision saved.</p>
+      {isRoomBooker(session.email) ? (
+        <div className="mb-5 grid gap-2 sm:grid-cols-2">
+          <Link
+            href="/rooms"
+            className="rounded-xl border border-[#ead8d8] bg-[var(--tint-mint)] px-4 py-3 text-[14px] font-medium text-[var(--ink)] hover:bg-[#faf4f4]"
+          >
+            Room booking
+            <span className="mt-0.5 block text-[12px] font-normal text-[var(--muted)]">Book a meeting room</span>
+          </Link>
+          <Link
+            href="/assign-parking"
+            className="rounded-xl border border-[#ead8d8] bg-[var(--tint-mint)] px-4 py-3 text-[14px] font-medium text-[var(--ink)] hover:bg-[#faf4f4]"
+          >
+            Parking assign
+            <span className="mt-0.5 block text-[12px] font-normal text-[var(--muted)]">Reserve a staff parking bay</span>
+          </Link>
+        </div>
       ) : null}
 
-      {!canDesk && !waiting.length ? (
+      {!canDesk && !mine.length ? (
         <Card>
           <Empty
             title="No access to this desk"
@@ -84,14 +90,14 @@ export default async function StaffRequestPage({
         </Card>
       ) : null}
 
-      {canDesk || waiting.length ? (
+      {canDesk || mine.length ? (
       <>
       <div className="mb-5 flex gap-1 overflow-x-auto rounded-xl border border-[var(--line)] bg-white p-1">
         {TABS.map((item) => {
           if (item.id === "new" && !canDesk) return null;
           const href = item.id === "new" ? "/request" : `/request?tab=${item.id}`;
           const active = tab === item.id;
-          const count = item.id === "approve" ? waiting.length : item.id === "history" ? mine.length : 0;
+          const count = item.id === "history" ? mine.length : 0;
           return (
             <Link
               key={item.id}
@@ -117,39 +123,10 @@ export default async function StaffRequestPage({
             departments={departments.map((item) => ({ value: item.id, label: item.name }))}
             departmentId={session.departmentId || departments[0]?.id || ""}
             today={todayStamp()}
-            managerName={manager?.name || null}
+            people={people}
+            bookerEmail={session.email}
           />
         </Card>
-      ) : null}
-
-      {tab === "approve" ? (
-        waiting.length ? (
-          <div className="space-y-3">
-            {waiting.map((visit) => {
-              const names = visit.visitors.map((link) => link.visitor.fullName).filter(Boolean);
-              return (
-                <Link key={visit.id} href={`/request/${visit.id}`} className="block">
-                  <Card tone="sand">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-[13px] font-semibold">{visit.visitCode}</span>
-                      <span className="text-[12px] text-[var(--muted)]">{visit.createdBy.name}</span>
-                    </div>
-                    <p className="mt-1 text-[13px]">{visit.purpose}</p>
-                    <p className="mt-1 text-[12px] text-[var(--muted)]">
-                      {fmtDateTime(visit.expectedArrival)} · {visit.department.name} · {names.join(", ") || `${visit.visitorCount} guests`}
-                      {arrangementHint(visit) ? ` · ${arrangementHint(visit)}` : ""}
-                    </p>
-                    <p className="mt-2 text-[12px] font-medium text-[var(--brand-ink)]">Review and decide</p>
-                  </Card>
-                </Link>
-              );
-            })}
-          </div>
-        ) : (
-          <Card>
-            <Empty title="Nothing waiting" hint="Team requests that need your approval will show here." />
-          </Card>
-        )
       ) : null}
 
       {tab === "history" ? (
@@ -172,12 +149,11 @@ export default async function StaffRequestPage({
                     <p className="mt-2 text-[13px]">{visit.purpose}</p>
                     <p className="mt-1 text-[12px] text-[var(--muted)]">
                       {fmtDateTime(visit.expectedArrival)} · {guest || `${visit.visitorCount} guests`}
-                      {visit.status === "MANAGER_REVIEW" && visit.lineManager ? ` · With ${visit.lineManager.name}` : ""}
-                      {visit.status === "INTAKE" ? " · With Administration" : ""}
+                      {visit.status === "INTAKE" ? " · With reception" : ""}
                       {visit.driverRequired ? " · Driver" : ""}
                       {visit.giftRequired ? ` · Gift${visit.giftType ? ` (${visit.giftType})` : ""}` : ""}
                       {visit.gatePassRequired ? " · Gate pass" : ""}
-                      {visit.meetingRoom ? ` · ${visit.meetingRoom}` : ""}
+                      {` · ${visit.meetingRoom || "N/A"}`}
                     </p>
                   </Card>
                 </Link>

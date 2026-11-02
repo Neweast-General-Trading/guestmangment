@@ -11,6 +11,7 @@ assert.equal(canSeeTracking("olga@neweast.co"), false);
 
 assert.ok(navFor("SYSTEM_ADMIN", "sakour@neweast.co").some((item) => item.href === "/tracking"));
 assert.ok(navFor("SYSTEM_ADMIN", "salma.moufallah@neweast.com").some((item) => item.href === "/tracking"));
+assert.ok(navFor("EMPLOYEE", "salma.moufallah@neweast.com").some((item) => item.href === "/escalations"));
 assert.equal(navFor("SYSTEM_ADMIN", "guru@neweast.co").some((item) => item.href === "/tracking"), false);
 assert.equal(navFor("EMPLOYEE", "rizwan@neweast.co").some((item) => item.href === "/tracking"), false);
 

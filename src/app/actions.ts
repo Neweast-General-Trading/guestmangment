@@ -28,14 +28,17 @@ import {
 import { parseQrPayload } from "@/lib/qr";
 import { accessHref, canManageAccess, parseAccessGroup, parseAccessPage, parseAccessPageSize, parseAssignableRole } from "@/lib/access";
 import { assignStaffParking, releaseStaffParking } from "@/lib/parking-assign";
-import { canDecideEscalation, canManageConfig, canManageIntake, canManageServiceMaster, canOperateGate } from "@/lib/permissions";
-import { bookStaffRoomHold, cancelStaffRoomHold } from "@/lib/room-booking";
+import { canDecideBuildingTour, canDecideEscalation, canManageConfig, canManageIntake, canManageServiceMaster, canOperateGate } from "@/lib/permissions";
+import { saveGuestDocs } from "@/lib/guest-docs";
+import { bookStaffRoomHold, cancelStaffRoomHold, releaseVisitConfirmations } from "@/lib/room-booking";
 import { assertFutureVisit } from "@/lib/visit-schedule";
 import { confirmIntake, decideEscalation, escalateIntake, ingestEmailText, submitIntake, updateIntakeVisit } from "@/lib/intake";
 import { approveGatePass, approveGift, giftFromForm, markDriverDone, markGatePassDone, markGiftDone } from "@/lib/arrangements";
-import { createStaffRequest, decideStaffRequest } from "@/lib/staff-request";
+import { createReceptionDeskVisit, createStaffRequest, decideStaffRequest, updateStaffRequest } from "@/lib/staff-request";
 import { syncGuestInbox } from "@/lib/inbox-sync";
 import { isKnownGuestKind } from "@/lib/email-template";
+import { parseTourType } from "@/lib/constants";
+import { applyTourType, decideBuildingTour, decideSupplierVisit } from "@/lib/tours";
 import { fromForm } from "@/lib/hospitality";
 import { codeFromLabel, isOperationalStaff, updateServiceTask } from "@/lib/service-master";
 import { syncPayrollEmployees } from "@/lib/payroll";
@@ -515,7 +518,7 @@ function intakeVisitorsFrom(formData: FormData) {
   for (let i = 0; i < count; i += 1) {
     const fullName = String(formData.get(`visitor_${i}_fullName`) || "").trim();
     const mobile = String(formData.get(`visitor_${i}_mobile`) || "").trim();
-    if (!fullName || !mobile) continue;
+    if (!fullName) continue;
     visitors.push({
       fullName,
       mobile,
@@ -545,7 +548,9 @@ async function saveIntakeFromForm(session: NonNullable<Awaited<ReturnType<typeof
     driverMobile: String(formData.get("driverMobile") || ""),
     driverVehicle: String(formData.get("driverVehicle") || ""),
     visitors: intakeVisitorsFrom(formData),
+    tourType: parseTourType(formData.get("tourType")),
   });
+  await saveGuestDocs(visitId, formData);
   return visitId;
 }
 
@@ -558,43 +563,64 @@ export async function submitStaffRequestAction(formData: FormData) {
   const session = await requireSession();
   if (!session) redirect("/login");
   let code = "";
-  let manager = "";
   try {
-    const rows = Number(formData.get("visitorRows") || 1);
-    const visitors = [];
-    for (let index = 0; index < rows; index += 1) {
-      const fullName = String(formData.get(`fullName_${index}`) || "").trim();
-      if (!fullName) continue;
-      visitors.push({
-        fullName,
-        mobile: String(formData.get(`mobile_${index}`) || ""),
-        email: String(formData.get(`email_${index}`) || ""),
-        company: String(formData.get(`company_${index}`) || ""),
-        jobTitle: String(formData.get(`jobTitle_${index}`) || ""),
-        nationality: String(formData.get(`nationality_${index}`) || ""),
-      });
-    }
-    const kind = String(formData.get("guestKind") || "GUEST");
-    if (!isKnownGuestKind(kind)) throw new Error("Choose a guest type.");
-    const result = await createStaffRequest(session, {
-      visitDate: String(formData.get("visitDate") || ""),
-      arrivalTime: String(formData.get("arrivalTime") || ""),
-      departmentId: String(formData.get("departmentId") || ""),
-      guestKind: kind,
-      purpose: String(formData.get("purpose") || ""),
-      driverRequired: formData.get("driverRequired") === "yes",
-      gatePassRequired: formData.get("gatePassRequired") === "yes",
-      ...giftFromForm(formData),
-      visitors,
-    });
+    const result = await createStaffRequest(session, staffRequestFromForm(formData));
+    await saveGuestDocs(result.visit.id, formData);
     code = result.visit.visitCode;
-    manager = result.managerName || "";
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not send the request.";
     redirect(`/request?error=${encodeURIComponent(message)}`);
   }
   refresh();
-  redirect(`/request?tab=new&sent=${encodeURIComponent(code)}${manager ? `&manager=${encodeURIComponent(manager)}` : "&direct=1"}`);
+  redirect(`/request?tab=new&sent=${encodeURIComponent(code)}`);
+}
+
+function staffRequestFromForm(formData: FormData) {
+  const rows = Number(formData.get("visitorRows") || 1);
+  const visitors = [];
+  for (let index = 0; index < rows; index += 1) {
+    const fullName = String(formData.get(`fullName_${index}`) || "").trim();
+    if (!fullName) continue;
+    visitors.push({
+      fullName,
+      mobile: String(formData.get(`mobile_${index}`) || ""),
+      email: String(formData.get(`email_${index}`) || ""),
+      company: String(formData.get(`company_${index}`) || ""),
+      jobTitle: String(formData.get(`jobTitle_${index}`) || ""),
+      nationality: String(formData.get(`nationality_${index}`) || ""),
+    });
+  }
+  const kind = String(formData.get("guestKind") || "GUEST");
+  if (!isKnownGuestKind(kind)) throw new Error("Choose a guest type.");
+  return {
+    visitDate: String(formData.get("visitDate") || ""),
+    arrivalTime: String(formData.get("arrivalTime") || ""),
+    departmentId: String(formData.get("departmentId") || ""),
+    guestKind: kind,
+    purpose: String(formData.get("purpose") || ""),
+    driverRequired: formData.get("driverRequired") === "yes",
+    gatePassRequired: formData.get("gatePassRequired") === "yes",
+    ...giftFromForm(formData),
+    visitors,
+    tourType: parseTourType(formData.get("tourType")),
+    meetingRoom: String(formData.get("meetingRoom") || ""),
+    inviteEmails: formData.getAll("inviteEmail").map(String),
+  };
+}
+
+export async function updateStaffRequestAction(formData: FormData) {
+  const session = await requireSession();
+  if (!session) redirect("/login");
+  const visitId = String(formData.get("visitId") || "");
+  try {
+    await updateStaffRequest(session, visitId, staffRequestFromForm(formData));
+    await saveGuestDocs(visitId, formData);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not save the request.";
+    redirect(`/request/${visitId}?error=${encodeURIComponent(message)}`);
+  }
+  refresh();
+  redirect(`/request/${visitId}?saved=1`);
 }
 
 export async function decideStaffRequestAction(formData: FormData) {
@@ -609,13 +635,13 @@ export async function decideStaffRequestAction(formData: FormData) {
     redirect(`/request/${visitId}?error=${encodeURIComponent(message)}`);
   }
   refresh();
-  redirect("/request?tab=approve&decided=1");
+  redirect("/request?tab=history");
 }
 
 function arrangementFail(formData: FormData, visitId: string, error: unknown) {
   const message = error instanceof Error ? error.message : "Could not update this arrangement.";
   const from = String(formData.get("from") || "intake");
-  const path = from === "gifts" ? "/gifts" : from === "passes" ? "/passes" : `/intake/${visitId}`;
+  const path = from === "gifts" ? "/gifts" : from === "passes" ? "/passes" : from === "drivers" ? "/drivers" : `/intake/${visitId}`;
   redirect(`${path}?error=${encodeURIComponent(message)}`);
 }
 
@@ -630,7 +656,7 @@ export async function completeDriverAction(formData: FormData) {
   }
   refresh();
   const from = String(formData.get("from") || "intake");
-  redirect(from === "gifts" ? "/gifts?driver=1" : `/intake/${visitId}?driver=1`);
+  redirect(from === "drivers" ? "/drivers?confirmed=1" : from === "gifts" ? "/gifts?driver=1" : `/intake/${visitId}?driver=1`);
 }
 
 export async function approveGiftAction(formData: FormData) {
@@ -680,7 +706,8 @@ export async function completeGatePassAction(formData: FormData) {
   if (!session) redirect("/login");
   const visitId = String(formData.get("visitId") || "");
   try {
-    await markGatePassDone(session, visitId, String(formData.get("note") || ""));
+    const file = formData.get("file");
+    await markGatePassDone(session, visitId, String(formData.get("note") || ""), file instanceof File ? file : null);
   } catch (error) {
     arrangementFail(formData, visitId, error);
   }
@@ -791,6 +818,38 @@ export async function decideEscalationAction(formData: FormData) {
   redirect(decision === "APPROVED" ? `/intake/${visitId}` : "/escalations?rejected=1");
 }
 
+export async function decideBuildingTourAction(formData: FormData) {
+  const session = await requireSession();
+  if (!session) redirect("/login");
+  if (!canDecideBuildingTour(session)) redirect("/escalations");
+  const visitId = String(formData.get("visitId") || "");
+  const decision = String(formData.get("decision") || "") === "REJECTED" ? "REJECTED" : "APPROVED";
+  try {
+    await decideBuildingTour(session, visitId, decision, String(formData.get("notes") || ""));
+    if (decision === "APPROVED") await releaseVisitConfirmations(visitId);
+  } catch (error) {
+    intakeFail("/escalations", error);
+  }
+  refresh();
+  redirect(decision === "APPROVED" ? `/escalations?approved=1` : "/escalations?rejected=1");
+}
+
+export async function decideSupplierVisitAction(formData: FormData) {
+  const session = await requireSession();
+  if (!session) redirect("/login");
+  if (!canDecideBuildingTour(session)) redirect("/escalations");
+  const visitId = String(formData.get("visitId") || "");
+  const decision = String(formData.get("decision") || "") === "REJECTED" ? "REJECTED" : "APPROVED";
+  try {
+    await decideSupplierVisit(session, visitId, decision, String(formData.get("notes") || ""));
+    if (decision === "APPROVED") await releaseVisitConfirmations(visitId);
+  } catch (error) {
+    intakeFail("/escalations", error);
+  }
+  refresh();
+  redirect(decision === "APPROVED" ? "/escalations?supplier=1" : "/escalations?rejected=1");
+}
+
 function roomsFail(date: string, error: unknown) {
   const message = error instanceof Error ? error.message : "Outlook could not book the room.";
   redirect(`/rooms?date=${encodeURIComponent(date)}&error=${encodeURIComponent(message)}`);
@@ -820,6 +879,11 @@ export async function bookRoomTrialAction(formData: FormData) {
     if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || to <= from) {
       throw new Error("End time must be after the start time.");
     }
+    const visitId = String(formData.get("visitId") || "").trim() || undefined;
+    if (visitId) {
+      await saveGuestDocs(visitId, formData);
+      await applyTourType(visitId, parseTourType(formData.get("tourType")));
+    }
     await bookStaffRoomHold(session, {
       roomName,
       start: from,
@@ -827,6 +891,10 @@ export async function bookRoomTrialAction(formData: FormData) {
       subject,
       description,
       inviteEmails: formData.getAll("inviteEmail").map(String),
+      visitId,
+      purpose: String(formData.get("purpose") || "").trim() || undefined,
+      guestMobile: String(formData.get("guestMobile") || "").trim() || undefined,
+      guestEmail: String(formData.get("guestEmail") || "").trim() || undefined,
     });
   } catch (error) {
     roomsFail(date || "", error);
@@ -883,6 +951,51 @@ export async function updateUserAccessAction(formData: FormData) {
   redirect(accessReturnPath(formData, { saved: "1" }));
 }
 
+export async function bookReceptionVisitAction(formData: FormData) {
+  const session = await requireSession();
+  if (!session) redirect("/login");
+  if (!canManageIntake(session.role)) redirect("/dashboard");
+  const date = String(formData.get("date") || formData.get("visitDate") || "");
+  try {
+    const rows = Number(formData.get("visitorRows") || 1);
+    const visitors = [];
+    for (let index = 0; index < rows; index += 1) {
+      const fullName = String(formData.get(`fullName_${index}`) || "").trim();
+      if (!fullName) continue;
+      visitors.push({
+        fullName,
+        mobile: String(formData.get(`mobile_${index}`) || ""),
+        email: String(formData.get(`email_${index}`) || ""),
+        company: String(formData.get(`company_${index}`) || ""),
+        jobTitle: String(formData.get(`jobTitle_${index}`) || ""),
+        nationality: String(formData.get(`nationality_${index}`) || ""),
+      });
+    }
+    const kind = String(formData.get("guestKind") || "GUEST");
+    if (!isKnownGuestKind(kind)) throw new Error("Choose a guest type.");
+    const booked = await createReceptionDeskVisit(session, {
+      visitDate: date,
+      arrivalTime: clockValue(String(formData.get("start") || formData.get("arrivalTime") || "")),
+      departmentId: String(formData.get("departmentId") || ""),
+      guestKind: kind,
+      purpose: String(formData.get("purpose") || ""),
+      driverRequired: formData.get("driverRequired") === "yes",
+      gatePassRequired: formData.get("gatePassRequired") === "yes",
+      ...giftFromForm(formData),
+      visitors,
+      roomName: String(formData.get("roomName") || ""),
+      endTime: clockValue(String(formData.get("end") || "")),
+      inviteEmails: formData.getAll("inviteEmail").map(String),
+      tourType: parseTourType(formData.get("tourType")),
+    });
+    await saveGuestDocs(booked.id, formData);
+  } catch (error) {
+    roomsFail(date, error);
+  }
+  refresh();
+  redirect(`/rooms?date=${encodeURIComponent(date)}&booked=1`);
+}
+
 export async function cancelRoomTrialAction(formData: FormData) {
   const session = await requireSession();
   if (!session) redirect("/login");
@@ -891,7 +1004,7 @@ export async function cancelRoomTrialAction(formData: FormData) {
   const eventId = String(formData.get("eventId") || "");
   try {
     if (!eventId) throw new Error("Missing booking.");
-    await cancelStaffRoomHold(session, eventId);
+    await cancelStaffRoomHold(session, eventId, String(formData.get("reason") || ""));
   } catch (error) {
     roomsFail(date, error);
   }

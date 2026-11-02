@@ -78,7 +78,7 @@ export type VisitStatus = (typeof VISIT_STATUSES)[number];
 export const STATUS_LABEL: Record<VisitStatus, string> = {
   DRAFT: "Draft",
   INTAKE: "Intake",
-  MANAGER_REVIEW: "With line manager",
+  MANAGER_REVIEW: "With reception",
   ESCALATED: "Escalated",
   PENDING_APPROVAL: "Pending approval",
   APPROVED: "Approved",
@@ -208,6 +208,42 @@ export const GUEST_KIND_LABEL: Record<GuestKind, string> = {
   CUSTOMER: "Customer",
   GUEST: "Guest",
 };
+
+export const TOUR_TYPES = [
+  { code: "NONE", label: "None" },
+  { code: "GF", label: "GF Tour" },
+  { code: "BUILDING", label: "Building Tour" },
+] as const;
+
+export type TourType = (typeof TOUR_TYPES)[number]["code"];
+
+export const TOUR_TYPE_LABEL: Record<TourType, string> = {
+  NONE: "None",
+  GF: "GF Tour",
+  BUILDING: "Building Tour",
+};
+
+export function parseTourType(value: unknown): TourType {
+  const raw = String(value || "NONE").trim().toUpperCase().replace(/\s+/g, "_");
+  if (raw === "GF" || raw === "GF_TOUR") return "GF";
+  if (raw === "BUILDING" || raw === "BUILDING_TOUR") return "BUILDING";
+  return "NONE";
+}
+
+export const SAMIR_EMAILS = ["samir.ibrahim@neweast.co", "samir.ibrahim@neweast.com"] as const;
+export const SALMA_EMAILS = ["salma.moufallah@neweast.com", "salma.moufallah@neweast.co"] as const;
+export const HANNA_EMAILS = ["hannah@neweast.co", "hannah@neweast.com"] as const;
+export const JESMAN_EMAILS = ["jesman@neweast.co", "jesman@neweast.com"] as const;
+
+export function isSalmaEmail(email?: string | null) {
+  const value = (email || "").trim().toLowerCase();
+  return (SALMA_EMAILS as readonly string[]).includes(value);
+}
+
+export function isSamirEmail(email?: string | null) {
+  const value = (email || "").trim().toLowerCase();
+  return (SAMIR_EMAILS as readonly string[]).includes(value);
+}
 
 export const HQ_NAME = "NEWEAST Headquarters";
 export const APP_NAME = "Guest Management";

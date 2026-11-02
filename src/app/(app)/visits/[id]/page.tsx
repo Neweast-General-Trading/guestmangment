@@ -26,7 +26,7 @@ import { prisma } from "@/lib/prisma";
 import { meetingRoomOptions } from "@/lib/graph";
 import { lookups } from "@/lib/queries";
 import { canAssignParking, canDecideApproval, canOperateGate, canSeeIdentity, canSeeInternalNotes } from "@/lib/permissions";
-import { primaryVisitor, sanitizeVisit, visitInclude } from "@/lib/visits";
+import { primaryVisitor, sanitizeVisit, visitInclude, visitWhereFor } from "@/lib/visits";
 import { hasHospitality, mealSummary } from "@/lib/hospitality";
 import { checkInModeLabel, needLabel, selectedFromVisit } from "@/lib/guest-needs";
 import { TASK_STATUSES } from "@/lib/service-master";
@@ -42,7 +42,7 @@ export default async function VisitDetailPage({
   if (!session) return null;
   const { id } = await params;
   const { error } = await searchParams;
-  const raw = await prisma.visit.findUnique({ where: { id }, include: visitInclude });
+  const raw = await prisma.visit.findFirst({ where: { AND: [{ id }, visitWhereFor(session)] }, include: visitInclude });
   if (!raw) notFound();
   const visit = sanitizeVisit(raw, session.role);
   const visitor = primaryVisitor(visit);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { defaultArrivalTime, isPastVisitSchedule } from "./visit-schedule";
-import { authorizationBanner, resolveQrGateAction } from "./visits";
+import { authorizationBanner, isPendingContact, resolveQrGateAction } from "./visits";
 
 function check() {
   assert.equal(authorizationBanner("EXPECTED").label, "APPROVED – READY FOR CHECK-IN");
@@ -21,6 +21,9 @@ function check() {
   assert.equal(isPastVisitSchedule("2099-01-01", "09:00"), false);
   assert.equal(defaultArrivalTime("2099-01-01", new Date("2026-09-22T12:00:00+04:00")), "09:30");
   assert.equal(defaultArrivalTime("2026-09-22", new Date("2026-09-22T12:00:00+04:00")), "12:00");
+  assert.equal(isPendingContact(""), true);
+  assert.equal(isPendingContact("pending:abc"), true);
+  assert.equal(isPendingContact("0501234567"), false);
 
   console.log("visits.check: ok");
 }
