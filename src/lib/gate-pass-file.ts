@@ -10,12 +10,12 @@ const TYPES: Record<string, string> = {
   ".webp": "image/webp",
 };
 
-export async function saveGatePassFile(visitId: string, file?: File | null) {
+export async function saveGatePassFile(visitId: string, file?: File | null, personId?: string) {
   if (!file || file.size <= 0) throw new Error("Upload the gate pass file.");
   if (file.size > 8 * 1024 * 1024) throw new Error("The gate pass file must be under 8 MB.");
   const ext = path.extname(file.name || "").toLowerCase();
   if (!TYPES[ext]) throw new Error("Upload a PDF or image.");
-  const name = `${visitId}${ext}`;
+  const name = personId ? `${visitId}-${personId}${ext}` : `${visitId}${ext}`;
   await mkdir(DIR, { recursive: true });
   await writeFile(path.join(DIR, name), Buffer.from(await file.arrayBuffer()));
   return { name, type: TYPES[ext] };

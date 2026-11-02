@@ -12,35 +12,43 @@ const MIME: Record<string, string> = {
   ".webp": "image/webp",
 };
 
+async function storeDoc(ownerId: string, slot: (typeof GUEST_DOC_SLOTS)[number], file: File) {
+  if (file.size > 8 * 1024 * 1024) throw new Error(`${slot.label} must be under 8 MB.`);
+  const ext = path.extname(file.name || "").toLowerCase();
+  if (!MIME[ext]) throw new Error(`${slot.label} must be a PDF or an image.`);
+  const stored = `${ownerId}-${slot.id}${ext}`;
+  await mkdir(DIR, { recursive: true });
+  await writeFile(path.join(DIR, stored), Buffer.from(await file.arrayBuffer()));
+  return { type: slot.id, name: path.basename(file.name || stored), stored } satisfies GuestDoc;
+}
+
 export async function saveGuestDocs(visitId: string, formData: FormData) {
-  const visit = await prisma.visit.findUnique({
-    where: { id: visitId },
-    select: { attachmentsJson: true },
+  const links = await prisma.visitVisitor.findMany({
+    where: { visitId },
+    orderBy: [{ sortOrder: "asc" }, { isPrimary: "desc" }],
+    select: { id: true, attachmentsJson: true },
   });
-  if (!visit) throw new Error("Visit request was not found.");
-  const current = parseGuestDocs(visit.attachmentsJson);
-  let changed = false;
-  for (const slot of GUEST_DOC_SLOTS) {
-    const file = formData.get(`doc_${slot.id}`);
-    if (!(file instanceof File) || file.size <= 0) continue;
-    if (file.size > 8 * 1024 * 1024) throw new Error(`${slot.label} must be under 8 MB.`);
-    const ext = path.extname(file.name || "").toLowerCase();
-    if (!MIME[ext]) throw new Error(`${slot.label} must be a PDF or an image.`);
-    const stored = `${visitId}-${slot.id}${ext}`;
-    await mkdir(DIR, { recursive: true });
-    await writeFile(path.join(DIR, stored), Buffer.from(await file.arrayBuffer()));
-    const next: GuestDoc = { type: slot.id, name: path.basename(file.name || stored), stored };
-    const index = current.findIndex((doc) => doc.type === slot.id);
-    if (index >= 0) current[index] = next;
-    else current.push(next);
-    changed = true;
+  if (!links.length) throw new Error("Visit request was not found.");
+  for (let index = 0; index < links.length; index += 1) {
+    const current = parseGuestDocs(links[index].attachmentsJson);
+    let changed = false;
+    for (const slot of GUEST_DOC_SLOTS) {
+      const named = formData.get(`doc_${index}_${slot.id}`);
+      const legacy = index === 0 ? formData.get(`doc_${slot.id}`) : null;
+      const file = named instanceof File && named.size > 0 ? named : legacy instanceof File && legacy.size > 0 ? legacy : null;
+      if (!file) continue;
+      const next = await storeDoc(links[index].id, slot, file);
+      const at = current.findIndex((doc) => doc.type === slot.id);
+      if (at >= 0) current[at] = next;
+      else current.push(next);
+      changed = true;
+    }
+    if (!changed) continue;
+    await prisma.visitVisitor.update({
+      where: { id: links[index].id },
+      data: { attachmentsJson: JSON.stringify(current) },
+    });
   }
-  if (!changed) return current;
-  await prisma.visit.update({
-    where: { id: visitId },
-    data: { attachmentsJson: JSON.stringify(current) },
-  });
-  return current;
 }
 
 export async function readGuestDoc(stored: string, type: GuestDocType) {

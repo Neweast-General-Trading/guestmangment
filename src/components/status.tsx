@@ -1,5 +1,6 @@
 import { STATUS_LABEL, type VisitStatus } from "@/lib/constants";
 import { TYPE_COLOR } from "@/lib/hospitality";
+import { preparationLabel, type PreparationVisit } from "@/lib/preparation";
 
 const TONE: Record<string, string> = {
   DRAFT: "bg-[#f1f2f4] text-[#5f6672]",
@@ -29,12 +30,18 @@ const TONE: Record<string, string> = {
   INFO_REQUESTED: "bg-[#f8f1de] text-[#9a6b12]",
 };
 
-export function StatusPill({ status }: { status: string }) {
+export function StatusPill({ status, label }: { status: string; label?: string }) {
+  const text = label || STATUS_LABEL[status as VisitStatus] || status;
+  const tone = text === "Ready" ? "bg-[#e8f6ee] text-[#1f7a4d]" : TONE[status] ?? "bg-[#f1f2f4] text-[#5f6672]";
   return (
-    <span className={`inline-flex h-6 shrink-0 items-center rounded-full px-2 text-[11px] font-medium whitespace-nowrap ${TONE[status] ?? "bg-[#f1f2f4] text-[#5f6672]"}`}>
-      {STATUS_LABEL[status as VisitStatus] ?? status}
+    <span className={`inline-flex h-6 shrink-0 items-center rounded-full px-2 text-[11px] font-medium whitespace-nowrap ${tone}`}>
+      {text}
     </span>
   );
+}
+
+export function VisitStatus({ visit }: { visit: PreparationVisit }) {
+  return <StatusPill status={visit.status} label={preparationLabel(visit)} />;
 }
 
 export function TypeTag({ children, type }: { children: string; type?: string }) {

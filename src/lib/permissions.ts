@@ -71,7 +71,8 @@ export function canApproveGift(user: { role: Role; email: string }) {
 }
 
 export function isGatePassApprover(user: { email: string }) {
-  return user.email.trim().toLowerCase() === GATE_PASS_OWNER_EMAIL;
+  const email = user.email.trim().toLowerCase();
+  return email === GATE_PASS_OWNER_EMAIL || isRoomBooker(email);
 }
 
 export function canSeePasses(user: { role: Role; email: string }) {
@@ -285,6 +286,12 @@ export function navGroupsFor(role: Role, email?: string, accessGroup?: string | 
             ...gifts,
             ...passes,
             { href: "/rooms", label: "Meeting rooms" },
+            ...(isRoomBooker(email)
+              ? [
+                  { href: "/assign-parking", label: "Parking assign" },
+                  { href: "/drivers", label: "Driver requests" },
+                ]
+              : []),
             { href: "/screens", label: "Screen setup" },
             ...access,
           ],

@@ -22,6 +22,19 @@ type VisitBits = {
   gatePassRequired: boolean;
   gatePassStatus: string | null;
   gatePassNote: string | null;
+  gatePassFile?: string | null;
+  attachmentsJson?: string | null;
+  visitors?: {
+    id: string;
+    gatePassRequired: boolean;
+    gatePassStatus: string | null;
+    gatePassFile: string | null;
+    giftRequired: boolean;
+    giftType: string | null;
+    giftStatus: string | null;
+    attachmentsJson?: string | null;
+    visitor: { fullName: string };
+  }[];
 };
 
 export function ArrangementDesk({
@@ -46,6 +59,23 @@ export function ArrangementDesk({
   showPass?: boolean;
 }) {
   if (!visit.driverRequired && !visit.giftRequired && !visit.gatePassRequired) return null;
+  const giftPeople = (visit.visitors || [])
+    .filter((person) => person.giftRequired)
+    .map((person) => ({
+      id: person.id,
+      name: person.visitor.fullName,
+      status: person.giftStatus,
+      detail: person.giftType,
+    }));
+  const passPeople = (visit.visitors || [])
+    .filter((person) => person.gatePassRequired)
+    .map((person) => ({
+      id: person.id,
+      name: person.visitor.fullName,
+      status: person.gatePassStatus,
+      attachmentsJson: person.attachmentsJson,
+      href: person.gatePassFile ? `/api/gate-passes/${visit.id}/${person.id}` : "",
+    }));
 
   return (
     <div className={`grid gap-3 lg:grid-cols-2 ${from === "intake" ? "mb-5" : ""}`}>
@@ -72,7 +102,42 @@ export function ArrangementDesk({
         </Card>
       ) : null}
 
-      {showGift && visit.giftRequired ? (
+      {showGift && giftPeople.length ? (
+        <Card tone={giftPeople.every((person) => person.status === "DONE") ? "sage" : "lilac"}>
+          <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--faint)]">Protocol gift</div>
+          <div className="mt-3 space-y-3">
+            {giftPeople.map((person) => (
+              <div key={person.id} className="rounded-xl border border-[var(--line)] bg-white p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[14px] font-medium">{person.name}</p>
+                  <ArrangementPill status={person.status} />
+                </div>
+                <p className="mt-1 text-[13px] text-[var(--muted)]">{person.detail || "Protocol gift"}</p>
+                {canApprove && person.status === "PENDING" ? (
+                  <form action={approveGiftAction} className="mt-3 space-y-2">
+                    <FormBusy label="Approving gift…" />
+                    <input type="hidden" name="visitId" value={visit.id} />
+                    <input type="hidden" name="linkId" value={person.id} />
+                    <input type="hidden" name="from" value={from} />
+                    <Textarea name="note" placeholder="Approved. Preparing the gift." className="min-h-16" />
+                    <Button type="submit">Approve · Preparing</Button>
+                  </form>
+                ) : null}
+                {canComplete && person.status === "PREPARING" ? (
+                  <form action={completeGiftAction} className="mt-3 space-y-2">
+                    <FormBusy label="Saving gift…" />
+                    <input type="hidden" name="visitId" value={visit.id} />
+                    <input type="hidden" name="linkId" value={person.id} />
+                    <input type="hidden" name="from" value={from} />
+                    <Textarea name="note" placeholder="Received at Reception." className="min-h-16" />
+                    <Button type="submit">Gift received · Done</Button>
+                  </form>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </Card>
+      ) : showGift && visit.giftRequired ? (
         <Card tone={visit.giftStatus === "DONE" ? "sage" : visit.giftStatus === "PREPARING" ? "sky" : "lilac"}>
           <div className="flex items-center justify-between gap-2">
             <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--faint)]">Protocol gift</div>
@@ -108,37 +173,81 @@ export function ArrangementDesk({
         </Card>
       ) : null}
 
-      {showPass && visit.gatePassRequired ? (
+      {showPass && passPeople.length ? (
+        <Card tone={passPeople.every((person) => person.status === "DONE") ? "sage" : "lilac"}>
+          <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--faint)]">Gate pass</div>
+          <p className="mt-1 text-[13px] text-[var(--muted)]">Approve each guest first. The file upload appears after approval.</p>
+          <div className="mt-3 space-y-3">
+            {passPeople.map((person) => {
+              const waiting = person.status !== "PREPARING" && person.status !== "DONE";
+              return (
+              <div key={person.id} className="rounded-xl border border-[var(--line)] bg-white p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[14px] font-medium">{person.name}</p>
+                  <ArrangementPill status={person.status} />
+                </div>
+                {person.href ? (
+                  <a className="mt-2 inline-block text-[13px] font-medium text-[var(--brand-ink)]" href={person.href}>
+                    Open gate pass
+                  </a>
+                ) : null}
+                {canApprovePass && waiting ? (
+                  <form action={approveGatePassAction} className="mt-3 space-y-2">
+                    <FormBusy label="Approving gate pass…" />
+                    <input type="hidden" name="visitId" value={visit.id} />
+                    <input type="hidden" name="linkId" value={person.id} />
+                    <input type="hidden" name="from" value={from} />
+                    <Button type="submit">Approve</Button>
+                  </form>
+                ) : null}
+                {(canApprovePass || canComplete) && person.status === "PREPARING" ? (
+                  <form action={completeGatePassAction} className="mt-3 space-y-2">
+                    <FormBusy label="Saving gate pass…" />
+                    <p className="text-[13px] font-medium">Upload gate pass</p>
+                    <input type="hidden" name="visitId" value={visit.id} />
+                    <input type="hidden" name="linkId" value={person.id} />
+                    <input type="hidden" name="from" value={from} />
+                    <input name="file" type="file" accept="application/pdf,image/png,image/jpeg,image/webp" required className="block w-full text-[13px]" />
+                    <Textarea name="note" placeholder="Note (optional)" className="min-h-16" />
+                    <Button type="submit">Upload gate pass</Button>
+                  </form>
+                ) : null}
+              </div>
+              );
+            })}
+          </div>
+        </Card>
+      ) : showPass && visit.gatePassRequired ? (
         <Card tone={visit.gatePassStatus === "DONE" ? "sage" : visit.gatePassStatus === "PREPARING" ? "sky" : "lilac"}>
           <div className="flex items-center justify-between gap-2">
             <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--faint)]">Gate pass</div>
             <ArrangementPill status={visit.gatePassStatus} />
           </div>
           <p className="mt-1 text-[13px] text-[var(--muted)]">
-            {visit.gatePassStatus === "PENDING"
-              ? "Waiting for Reception to approve the gate pass."
+            {visit.gatePassStatus === "PENDING" || !visit.gatePassStatus
+              ? "Approve this gate pass. The file upload appears after you approve."
               : visit.gatePassStatus === "PREPARING"
-                ? "Reception is preparing the gate pass. Upload the file when it is ready."
+                ? "Approved. Upload the gate pass."
                 : "Gate pass file is ready."}
           </p>
           {visit.gatePassNote ? <p className="mt-2 whitespace-pre-wrap text-[13px]">{visit.gatePassNote}</p> : null}
-          {canApprovePass && visit.gatePassStatus === "PENDING" ? (
+          {canApprovePass && (visit.gatePassStatus === "PENDING" || !visit.gatePassStatus) ? (
             <form action={approveGatePassAction} className="mt-3 space-y-2">
               <FormBusy label="Approving gate pass…" />
               <input type="hidden" name="visitId" value={visit.id} />
               <input type="hidden" name="from" value={from} />
-              <Textarea name="note" placeholder="Approved. Preparing the gate pass." className="min-h-16" />
-              <Button type="submit">Approve · Preparing</Button>
+              <Button type="submit">Approve</Button>
             </form>
           ) : null}
-          {canComplete && visit.gatePassStatus === "PREPARING" ? (
+          {(canApprovePass || canComplete) && visit.gatePassStatus === "PREPARING" ? (
             <form action={completeGatePassAction} className="mt-3 space-y-2">
               <FormBusy label="Saving gate pass…" />
+              <p className="text-[13px] font-medium">Upload gate pass</p>
               <input type="hidden" name="visitId" value={visit.id} />
               <input type="hidden" name="from" value={from} />
               <input name="file" type="file" accept="application/pdf,image/png,image/jpeg,image/webp" required className="block w-full text-[13px]" />
-              <Textarea name="note" placeholder="Gate pass uploaded." className="min-h-16" />
-              <Button type="submit">Upload gate pass · Done</Button>
+              <Textarea name="note" placeholder="Note (optional)" className="min-h-16" />
+              <Button type="submit">Upload gate pass</Button>
             </form>
           ) : null}
         </Card>

@@ -83,7 +83,7 @@ export function accessDeskLabel(person: { email: string; role: string }) {
   const email = person.email.trim().toLowerCase();
   if (isFullAccess(email)) return "Super admin — full system and Access";
   if (isRoomsViewer(email)) return "Rooms — see bookings and submit requests";
-  if (isRoomBooker(email)) return "Room booking and parking assign";
+  if (isRoomBooker(email)) return "Room booking, parking, drivers, and reception";
   if (email === GATE_PASS_OWNER_EMAIL) return "Gate pass and visit requests";
   if (person.role === "HR_ADMIN") return "Reception — intake and rooms";
   if (person.role === "SYSTEM_ADMIN") return "Administration — visits, rooms, and reports";

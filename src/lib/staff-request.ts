@@ -1,6 +1,6 @@
 import { addTimeline, writeAudit } from "./audit";
 import { startArrangements } from "./arrangements";
-import { type GuestKind, type TourType } from "./constants";
+import { SALMA_EMAILS, type GuestKind, type TourType } from "./constants";
 import { visitTypeFromKind } from "./email-template";
 import { isGuestBookableRoom, roomsWithAvailability } from "./graph";
 import { fmtDate, fmtTime } from "./format";
@@ -11,7 +11,7 @@ import { canManageIntake, type SessionUser } from "./permissions";
 import { bookStaffRoomHold, parseRoomInvitees, syncOutlookRoom } from "./room-booking";
 import { prisma } from "./prisma";
 import { assertFutureVisit, combineVisitDateTime } from "./visit-schedule";
-import { applyTourType } from "./tours";
+import { applyTourType, notifyNamed } from "./tours";
 import { upsertVisitor } from "./visits";
 
 const HIDDEN_HOST = "olga@neweast.co";
@@ -23,13 +23,18 @@ export type StaffVisitorInput = {
   company: string;
   jobTitle: string;
   nationality: string;
+  gatePassRequired?: boolean;
+  giftRequired?: boolean;
+  giftType?: string;
 };
 
 export type StaffRequestInput = {
   visitDate: string;
   arrivalTime: string;
+  endTime?: string;
   departmentId: string;
   guestKind: GuestKind;
+  visitTitle: string;
   purpose: string;
   driverRequired: boolean;
   giftRequired: boolean;
@@ -49,6 +54,60 @@ function optionalRoom(value?: string | null) {
   const room = (value || "").trim();
   if (!room || /^n\/?a$/i.test(room)) return "";
   return room;
+}
+
+function visitEnd(visitDate: string, arrival: string, endTime?: string) {
+  const start = combineVisitDateTime(visitDate, arrival);
+  const end = combineVisitDateTime(visitDate, endTime || "");
+  if (!endTime || end <= start) throw new Error("End time must be after the arrival time.");
+  return { start, end };
+}
+
+function requiredTitle(value: string) {
+  const title = value.trim();
+  if (!title) throw new Error("Title of visit is required.");
+  return title;
+}
+
+function personFlags(input: StaffRequestInput) {
+  const passAll = input.gatePassRequired && input.visitors.every((visitor) => !visitor.gatePassRequired);
+  const giftAll = input.giftRequired && input.visitors.every((visitor) => !visitor.giftRequired);
+  return input.visitors.map((visitor) => ({
+    ...visitor,
+    fullName: visitor.fullName.trim(),
+    gatePassRequired: Boolean(visitor.gatePassRequired) || passAll,
+    giftRequired: Boolean(visitor.giftRequired) || giftAll,
+    giftType: (visitor.giftType || (giftAll ? input.giftType || "" : "")).trim(),
+  }));
+}
+
+function linkData(
+  visitorId: string,
+  index: number,
+  visitor: ReturnType<typeof personFlags>[number],
+  previous?: {
+    attachmentsJson: string | null;
+    gatePassStatus: string | null;
+    gatePassNote: string | null;
+    gatePassFile: string | null;
+    giftStatus: string | null;
+    giftNote: string | null;
+  },
+) {
+  return {
+    visitorId,
+    isPrimary: index === 0,
+    sortOrder: index,
+    attachmentsJson: previous?.attachmentsJson || null,
+    gatePassRequired: visitor.gatePassRequired,
+    gatePassStatus: visitor.gatePassRequired ? previous?.gatePassStatus || "PENDING" : null,
+    gatePassNote: visitor.gatePassRequired ? previous?.gatePassNote || null : null,
+    gatePassFile: visitor.gatePassRequired ? previous?.gatePassFile || null : null,
+    giftRequired: visitor.giftRequired,
+    giftType: visitor.giftRequired ? visitor.giftType || null : null,
+    giftStatus: visitor.giftRequired ? previous?.giftStatus || "PENDING" : null,
+    giftNote: visitor.giftRequired ? previous?.giftNote || null : null,
+  };
 }
 
 async function assertRoomFree(room: string, start: Date, end: Date) {
@@ -88,19 +147,22 @@ export async function createStaffRequest(actor: SessionUser, input: StaffRequest
   if (visitorsIn.some((visitor) => visitor.email.trim() && !visitor.email.includes("@"))) {
     throw new Error("Guest email is not valid.");
   }
-  if (!input.purpose.trim()) throw new Error("Purpose is required.");
+  const visitTitle = requiredTitle(input.visitTitle);
+  const purpose = input.purpose.trim();
   if (!input.departmentId) throw new Error("Choose a department.");
   const proposedRoom = optionalRoom(input.meetingRoom);
-  if (input.giftRequired && !input.giftType?.trim()) throw new Error("Choose a gift type.");
+  if (input.giftRequired && !input.giftType?.trim() && input.visitors.every((visitor) => !visitor.giftType?.trim())) {
+    throw new Error("Choose a gift type.");
+  }
   assertFutureVisit(input.visitDate, input.arrivalTime);
-  const start = combineVisitDateTime(input.visitDate, input.arrivalTime);
-  const end = new Date(start.getTime() + 60 * 60 * 1000);
+  const { start, end } = visitEnd(input.visitDate, input.arrivalTime, input.endTime);
   await assertRoomFree(proposedRoom, start, end);
 
   const department = await prisma.department.findUnique({ where: { id: input.departmentId } });
   if (!department) throw new Error("Choose a department.");
+  const flagged = personFlags({ ...input, visitors: visitorsIn });
   const visitors = await Promise.all(
-    visitorsIn.map((visitor, index) =>
+    flagged.map((visitor) =>
       upsertVisitor({
         fullName: visitor.fullName,
         mobile: visitor.mobile.replace(/\s+/g, ""),
@@ -118,9 +180,11 @@ export async function createStaffRequest(actor: SessionUser, input: StaffRequest
       visitCode: await nextVisitCode(),
       type: visitTypeFromKind(input.guestKind),
       status: "INTAKE",
-      purpose: input.purpose.trim(),
+      visitTitle,
+      purpose,
       visitDate: new Date(`${input.visitDate}T00:00:00`),
-      expectedArrival: combineVisitDateTime(input.visitDate, input.arrivalTime),
+      expectedArrival: start,
+      expectedDeparture: end,
       hostId: actor.id,
       departmentId: department.id,
       visitorCount: visitors.length,
@@ -134,16 +198,13 @@ export async function createStaffRequest(actor: SessionUser, input: StaffRequest
       meetingRoom: proposedRoom || null,
       driverRequired: input.driverRequired,
       pickupRequired: input.driverRequired,
-      giftRequired: input.giftRequired,
-      giftType: input.giftRequired ? input.giftType?.trim() || null : null,
-      gatePassRequired: input.gatePassRequired,
+      giftRequired: flagged.some((visitor) => visitor.giftRequired),
+      giftType: flagged.find((visitor) => visitor.giftRequired)?.giftType || null,
+      gatePassRequired: flagged.some((visitor) => visitor.gatePassRequired),
       tourType: input.tourType || "NONE",
       colleagueInvitees: JSON.stringify(parseRoomInvitees(input.inviteEmails || [], actor.email)),
       visitors: {
-        create: visitors.map((visitor, index) => ({
-          visitorId: visitor.id,
-          isPrimary: index === 0,
-        })),
+        create: visitors.map((visitor, index) => linkData(visitor.id, index, flagged[index])),
       },
     },
   });
@@ -169,7 +230,7 @@ export async function createStaffRequest(actor: SessionUser, input: StaffRequest
     visitCode: visit.visitCode,
     guest,
     requesterName: actor.name,
-    purpose: input.purpose.trim(),
+    purpose: visitTitle,
     room: proposedRoom || "N/A",
   });
 
@@ -198,23 +259,26 @@ export async function updateStaffRequest(actor: SessionUser, visitId: string, in
   if (visitorsIn.some((visitor) => visitor.email.trim() && !visitor.email.includes("@"))) {
     throw new Error("Guest email is not valid.");
   }
-  if (!input.purpose.trim()) throw new Error("Purpose is required.");
+  const visitTitle = requiredTitle(input.visitTitle);
+  const purpose = input.purpose.trim();
   if (!input.departmentId) throw new Error("Choose a department.");
   const proposedRoom = optionalRoom(input.meetingRoom);
-  if (input.giftRequired && !input.giftType?.trim()) throw new Error("Choose a gift type.");
-  const start = combineVisitDateTime(input.visitDate, input.arrivalTime);
+  if (input.giftRequired && !input.giftType?.trim() && input.visitors.every((visitor) => !visitor.giftType?.trim())) {
+    throw new Error("Choose a gift type.");
+  }
+  const { start, end } = visitEnd(input.visitDate, input.arrivalTime, input.endTime);
   const sameSlot =
     (current.meetingRoom || "").toLowerCase() === proposedRoom.toLowerCase() &&
     Math.abs(current.expectedArrival.getTime() - start.getTime()) < 60_000;
   if (!sameSlot) {
     assertFutureVisit(input.visitDate, input.arrivalTime);
-    const end = new Date(start.getTime() + 60 * 60 * 1000);
     await assertRoomFree(proposedRoom, start, end);
   }
   const department = await prisma.department.findUnique({ where: { id: input.departmentId } });
   if (!department) throw new Error("Choose a department.");
+  const flagged = personFlags({ ...input, visitors: visitorsIn });
   const visitors = await Promise.all(
-    visitorsIn.map((visitor) =>
+    flagged.map((visitor) =>
       upsertVisitor({
         fullName: visitor.fullName,
         mobile: visitor.mobile.replace(/\s+/g, ""),
@@ -226,15 +290,19 @@ export async function updateStaffRequest(actor: SessionUser, visitId: string, in
       }),
     ),
   );
+  const previous = await prisma.visitVisitor.findMany({ where: { visitId } });
+  const previousByVisitor = new Map(previous.map((link) => [link.visitorId, link]));
   await prisma.visitVisitor.deleteMany({ where: { visitId } });
   await prisma.visit.update({
     where: { id: visitId },
     data: {
       type: visitTypeFromKind(input.guestKind),
       status: current.status === "MANAGER_REVIEW" ? "INTAKE" : current.status,
-      purpose: input.purpose.trim(),
+      visitTitle,
+      purpose,
       visitDate: new Date(`${input.visitDate}T00:00:00`),
       expectedArrival: start,
+      expectedDeparture: end,
       departmentId: department.id,
       visitorCount: visitors.length,
       vip: input.guestKind === "VIP",
@@ -242,13 +310,13 @@ export async function updateStaffRequest(actor: SessionUser, visitId: string, in
       meetingRoom: proposedRoom || null,
       driverRequired: input.driverRequired,
       pickupRequired: input.driverRequired,
-      giftRequired: input.giftRequired,
-      giftType: input.giftRequired ? input.giftType?.trim() || null : null,
-      gatePassRequired: input.gatePassRequired,
+      giftRequired: flagged.some((visitor) => visitor.giftRequired),
+      giftType: flagged.find((visitor) => visitor.giftRequired)?.giftType || null,
+      gatePassRequired: flagged.some((visitor) => visitor.gatePassRequired),
       tourType: input.tourType || "NONE",
       colleagueInvitees: JSON.stringify(parseRoomInvitees(input.inviteEmails || [], current.createdById === actor.id ? actor.email : "")),
       visitors: {
-        create: visitors.map((visitor, index) => ({ visitorId: visitor.id, isPrimary: index === 0 })),
+        create: visitors.map((visitor, index) => linkData(visitor.id, index, flagged[index], previousByVisitor.get(visitor.id))),
       },
     },
   });
@@ -349,7 +417,23 @@ async function notifyReceptionIntake(input: {
       `Requester: ${input.requesterName}`,
       `Guest: ${input.guest}`,
       input.room ? `Proposed room: ${input.room}` : "",
-      `Purpose: ${input.purpose}`,
+      `Title: ${input.purpose}`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  });
+  await notifyNamed({
+    emails: SALMA_EMAILS,
+    name: "Salma Moufallah",
+    visitId: input.visitId,
+    type: "INTAKE_READY",
+    title: "New guest visit request",
+    message: [
+      `${input.requesterName} submitted a guest visit request.`,
+      `Guest: ${input.guest}`,
+      `Title: ${input.purpose}`,
+      input.room ? `Proposed room: ${input.room}` : "",
+      input.visitCode,
     ]
       .filter(Boolean)
       .join("\n"),
@@ -366,14 +450,16 @@ export async function createReceptionDeskVisit(
   if (visitorsIn.some((visitor) => visitor.email.trim() && !visitor.email.includes("@"))) {
     throw new Error("Guest email is not valid.");
   }
-  if (!input.purpose.trim()) throw new Error("Purpose is required.");
+  const visitTitle = requiredTitle(input.visitTitle);
+  const purpose = input.purpose.trim();
   if (!input.departmentId) throw new Error("Choose a department.");
   if (!input.roomName.trim()) throw new Error("Choose a room.");
   assertFutureVisit(input.visitDate, input.arrivalTime);
   const department = await prisma.department.findUnique({ where: { id: input.departmentId } });
   if (!department) throw new Error("Choose a department.");
+  const flagged = personFlags({ ...input, visitors: visitorsIn });
   const visitors = await Promise.all(
-    visitorsIn.map((visitor) =>
+    flagged.map((visitor) =>
       upsertVisitor({
         fullName: visitor.fullName,
         mobile: visitor.mobile.replace(/\s+/g, ""),
@@ -385,15 +471,14 @@ export async function createReceptionDeskVisit(
       }),
     ),
   );
-  const start = combineVisitDateTime(input.visitDate, input.arrivalTime);
-  const end = combineVisitDateTime(input.visitDate, input.endTime || "");
-  if (!input.endTime || end <= start) throw new Error("End time must be after the start time.");
+  const { start, end } = visitEnd(input.visitDate, input.arrivalTime, input.endTime);
   const visit = await prisma.visit.create({
     data: {
       visitCode: await nextVisitCode(),
       type: visitTypeFromKind(input.guestKind),
       status: "INTAKE",
-      purpose: input.purpose.trim(),
+      visitTitle,
+      purpose,
       visitDate: new Date(`${input.visitDate}T00:00:00`),
       expectedArrival: start,
       expectedDeparture: end,
@@ -409,15 +494,12 @@ export async function createReceptionDeskVisit(
       meetingRoom: input.roomName.trim(),
       driverRequired: input.driverRequired,
       pickupRequired: input.driverRequired,
-      giftRequired: input.giftRequired,
-      giftType: input.giftRequired ? input.giftType?.trim() || null : null,
-      gatePassRequired: input.gatePassRequired,
+      giftRequired: flagged.some((visitor) => visitor.giftRequired),
+      giftType: flagged.find((visitor) => visitor.giftRequired)?.giftType || null,
+      gatePassRequired: flagged.some((visitor) => visitor.gatePassRequired),
       tourType: input.tourType || "NONE",
       visitors: {
-        create: visitors.map((visitor, index) => ({
-          visitorId: visitor.id,
-          isPrimary: index === 0,
-        })),
+        create: visitors.map((visitor, index) => linkData(visitor.id, index, flagged[index])),
       },
     },
   });
@@ -436,10 +518,11 @@ export async function createReceptionDeskVisit(
     roomName: input.roomName.trim(),
     start,
     end,
-    subject: `${visit.visitCode} · Guest visit · ${input.roomName.trim()}`,
-    description: input.purpose.trim(),
+    subject: visitTitle,
+    description: purpose,
     inviteEmails: input.inviteEmails,
-    purpose: input.purpose.trim(),
+    purpose,
+    visitTitle,
     guestMobile: visitorsIn[0].mobile,
     guestEmail: visitorsIn[0].email,
   });

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { ApprovalSummary } from "@/components/approval-track";
 import { PagedList } from "@/components/paged-list";
-import { StatusPill } from "@/components/status";
+import { VisitStatus } from "@/components/status";
 import { Button, TextInput } from "@/components/ui";
 import { approvalDesk } from "@/lib/approval-state";
 
@@ -90,7 +90,7 @@ export function InsideTable({
                   <td>{visit.badges[0]?.number ?? "—"}</td>
                   <td>{(visit.meetingRoom && visit.meetingRoom !== "Yes" ? visit.meetingRoom : null) || visit.location}</td>
                   <td>
-                    <StatusPill status={visit.status} />
+                    <VisitStatus visit={visit} />
                   </td>
                 </tr>
               ))}
@@ -478,6 +478,7 @@ export function ApprovalsList({
     visit: {
       id: string;
       visitCode: string;
+      visitTitle?: string;
       purpose: string;
       status: string;
       hostId: string;
@@ -510,14 +511,14 @@ export function ApprovalsList({
                   <div className="mt-1 text-[13px] text-[var(--muted)]">
                     {item.visit.visitors[0]?.visitor.fullName} · {item.visit.host.name} · {item.visit.department.name}
                   </div>
-                  <div className="mt-2 text-[13px]">{item.visit.purpose}</div>
+                  <div className="mt-2 text-[13px]">{item.visit.visitTitle || item.visit.purpose}</div>
                   <div className="mt-2 flex items-center gap-2 text-[12px] text-[var(--muted)]">
                     <span>{approvalDesk(item, item.visit)}</span>
                     <span>·</span>
                     <span>{item.stepName}</span>
                     <span>·</span>
                     <span>{fmtDateTime(item.visit.expectedArrival)}</span>
-                    <StatusPill status={item.visit.status} />
+                    <VisitStatus visit={item.visit} />
                   </div>
                 </div>
                 <form action={onDecide} className="flex min-w-64 flex-col gap-2">
@@ -677,6 +678,7 @@ export function SecurityQueue({
   visits: {
     id: string;
     visitCode: string;
+    visitTitle?: string;
     purpose: string;
     status: string;
     type: string;
@@ -694,7 +696,7 @@ export function SecurityQueue({
   return (
     <PagedList
       items={visits}
-      searchText={(visit) => `${visit.visitCode} ${visit.purpose} ${visit.host.name} ${visit.department.name} ${visit.visitors[0]?.visitor.fullName} ${visit.visitors[0]?.visitor.mobile} ${visit.visitors[0]?.visitor.company}`}
+      searchText={(visit) => `${visit.visitCode} ${visit.visitTitle} ${visit.purpose} ${visit.host.name} ${visit.department.name} ${visit.visitors[0]?.visitor.fullName} ${visit.visitors[0]?.visitor.mobile} ${visit.visitors[0]?.visitor.company}`}
       placeholder="Search visitor, host, visit…"
       empty="No visitors in this queue."
     >
@@ -720,7 +722,7 @@ export function SecurityQueue({
                   </div>
                   <div>
                     <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--faint)]">Purpose</div>
-                    <div className="font-medium">{visit.purpose}</div>
+                    <div className="font-medium">{visit.visitTitle || visit.purpose}</div>
                     <div className="text-[12px] text-[var(--muted)]">
                       {fmtTime(visit.expectedArrival)} · {typeLabel(visit.type)}
                     </div>
@@ -740,7 +742,7 @@ export function SecurityQueue({
                         <span className={`need-pill ${visit.qrCheckInRequired ? "bg-[#e8f6ee] text-[#1f7a4d]" : "bg-[#f8f1de] text-[#9a6b12]"}`}>
                           {visit.qrCheckInRequired ? "QR" : "Manual"}
                         </span>
-                        <StatusPill status={visit.status} />
+                        <VisitStatus visit={visit} />
                       </span>
                     </div>
                   </div>
@@ -784,7 +786,7 @@ export function InsidePeek({
                     {visit.host.name} · in since {fmtTime(visit.checkInAt)}
                   </div>
                 </div>
-                <StatusPill status={visit.status} />
+                <VisitStatus visit={visit} />
               </div>
             </Link>
           ))}
@@ -876,7 +878,7 @@ export function HospitalityList({
                     ))}
                   </div>
                 </div>
-                <StatusPill status={visit.status} />
+                <VisitStatus visit={visit} />
               </div>
             </Link>
           ))}

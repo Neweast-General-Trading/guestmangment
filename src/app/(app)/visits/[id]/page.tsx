@@ -14,7 +14,7 @@ import {
 } from "@/app/actions";
 import { ApprovalTrack } from "@/components/approval-track";
 import { QrCard } from "@/components/qr-card";
-import { StatusPill, TypeTag } from "@/components/status";
+import { VisitStatus, TypeTag } from "@/components/status";
 import { Button, Card, PageHeader, TextInput, Textarea } from "@/components/ui";
 import { ParkingSlotField } from "@/components/parking-slot-field";
 import { VisitForm } from "@/components/visit-form";
@@ -77,8 +77,8 @@ export default async function VisitDetailPage({
   return (
     <div>
       <PageHeader
-        title={visit.visitCode}
-        description={`${visitor?.fullName ?? "Visitor"} · ${visit.host.name} · ${visit.department.name}`}
+        title={`${(visit.visitTitle || visit.purpose || "Guest visit").trim()} - ${visit.createdBy.name}`}
+        description={`${visit.meetingRoom || "Room not set"} · ${visit.visitCode}`}
       />
       {error ? <p className="mb-4 rounded-md border border-[#ead8d8] bg-[var(--tint-peach)] px-3 py-2 text-[13px] text-[var(--brand-ink)]">{error}</p> : null}
       {intakeOpen ? (
@@ -99,7 +99,7 @@ export default async function VisitDetailPage({
               <Info label="Mobile" value={visitor?.mobile} extra={visitor?.email} />
               <Info label="Host" value={visit.host.name} extra={visit.host.jobTitle} />
               <Info label="Department" value={visit.department.name} extra={visit.location} />
-              <Info label="Purpose" value={visit.purpose} extra={visit.description} />
+              <Info label="Title of visit" value={visit.visitTitle || visit.purpose} extra={visit.visitTitle && visit.purpose && visit.purpose !== visit.visitTitle ? visit.purpose : visit.description} />
               <Info
                 label="Appointment"
                 value={`${fmtDate(visit.visitDate)} · ${fmtTime(visit.expectedArrival)}`}
@@ -307,7 +307,7 @@ export default async function VisitDetailPage({
             <section className="px-4 py-3.5">
               <div className="mb-3 flex items-center justify-between gap-2">
                 <h2 className="text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--faint)]">Approval</h2>
-                <StatusPill status={visit.status} />
+                <VisitStatus visit={visit} />
               </div>
               <ApprovalTrack visit={visit} />
             </section>

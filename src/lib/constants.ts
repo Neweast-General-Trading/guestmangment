@@ -77,8 +77,8 @@ export type VisitStatus = (typeof VISIT_STATUSES)[number];
 
 export const STATUS_LABEL: Record<VisitStatus, string> = {
   DRAFT: "Draft",
-  INTAKE: "Intake",
-  MANAGER_REVIEW: "With reception",
+  INTAKE: "Preparing",
+  MANAGER_REVIEW: "With manager",
   ESCALATED: "Escalated",
   PENDING_APPROVAL: "Pending approval",
   APPROVED: "Approved",

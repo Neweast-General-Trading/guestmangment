@@ -8,7 +8,7 @@ export function InvitePeople({
   people,
   bookerEmail,
   initial = [],
-  hint = "They receive the Outlook meeting when the room is booked, and a confirmation email when the room accepts.",
+  hint = "They receive a guest visit invitation when Reception confirms the booking.",
 }: {
   people: { value: string; label: string; hint?: string }[];
   bookerEmail: string;

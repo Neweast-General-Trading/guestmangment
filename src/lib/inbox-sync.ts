@@ -11,6 +11,7 @@ import {
 } from "./graph";
 import { ingestEmailText } from "./intake";
 import { prisma } from "./prisma";
+import { notifyOutsideRoomBookings } from "./outside-rooms";
 import { flushRoomConfirmReplies } from "./room-booking";
 import type { SessionUser } from "./permissions";
 
@@ -88,6 +89,7 @@ async function syncViaGraph(actor: SessionUser): Promise<InboxSyncResult> {
     }
   }
   await flushRoomConfirmReplies(heads).catch(() => undefined);
+  await notifyOutsideRoomBookings().catch(() => undefined);
   return { ok: true, scanned: heads.length, created, skipped, replies };
 }
 
@@ -141,6 +143,7 @@ async function syncViaImap(actor: SessionUser): Promise<InboxSyncResult> {
     }
     await client.logout();
     await flushRoomConfirmReplies().catch(() => undefined);
+    await notifyOutsideRoomBookings().catch(() => undefined);
     return { ok: true, scanned, created, skipped, replies };
   } catch {
     return { ok: false, reason: "Could not read the guest mailbox.", scanned, created, skipped, replies };

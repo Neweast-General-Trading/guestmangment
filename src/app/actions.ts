@@ -541,6 +541,7 @@ async function saveIntakeFromForm(session: NonNullable<Awaited<ReturnType<typeof
     departmentId: String(formData.get("departmentId") || ""),
     hostId: String(formData.get("hostId") || "") || undefined,
     guestKind,
+    visitTitle: String(formData.get("visitTitle") || ""),
     purpose: String(formData.get("purpose") || ""),
     meetingRoom: String(formData.get("meetingRoom") || ""),
     driverRequired: formData.get("driverRequired") === "on" || formData.get("driverRequired") === "Yes",
@@ -575,6 +576,17 @@ export async function submitStaffRequestAction(formData: FormData) {
   redirect(`/request?tab=new&sent=${encodeURIComponent(code)}`);
 }
 
+function personRequest(formData: FormData, index: number) {
+  const gatePassRequired = formData.get(`gatePass_${index}`) === "yes";
+  const giftRequired = formData.get(`gift_${index}`) === "yes";
+  if (!giftRequired) return { gatePassRequired, giftRequired: false, giftType: "" };
+  const kind = String(formData.get(`giftType_${index}`) || "").trim();
+  const other = String(formData.get(`giftTypeOther_${index}`) || "").trim();
+  const giftType = kind === "Other" ? other || "Other" : kind;
+  if (!giftType) throw new Error("Choose a gift type for each guest who needs one.");
+  return { gatePassRequired, giftRequired: true, giftType };
+}
+
 function staffRequestFromForm(formData: FormData) {
   const rows = Number(formData.get("visitorRows") || 1);
   const visitors = [];
@@ -588,19 +600,25 @@ function staffRequestFromForm(formData: FormData) {
       company: String(formData.get(`company_${index}`) || ""),
       jobTitle: String(formData.get(`jobTitle_${index}`) || ""),
       nationality: String(formData.get(`nationality_${index}`) || ""),
+      ...personRequest(formData, index),
     });
   }
   const kind = String(formData.get("guestKind") || "GUEST");
   if (!isKnownGuestKind(kind)) throw new Error("Choose a guest type.");
+  const personPass = visitors.some((visitor) => visitor.gatePassRequired);
+  const personGift = visitors.find((visitor) => visitor.giftRequired);
   return {
     visitDate: String(formData.get("visitDate") || ""),
     arrivalTime: String(formData.get("arrivalTime") || ""),
+    endTime: String(formData.get("endTime") || ""),
     departmentId: String(formData.get("departmentId") || ""),
     guestKind: kind,
+    visitTitle: String(formData.get("visitTitle") || ""),
     purpose: String(formData.get("purpose") || ""),
     driverRequired: formData.get("driverRequired") === "yes",
-    gatePassRequired: formData.get("gatePassRequired") === "yes",
-    ...giftFromForm(formData),
+    gatePassRequired: personPass || formData.get("gatePassRequired") === "yes",
+    giftRequired: Boolean(personGift) || formData.get("giftRequired") === "yes",
+    giftType: personGift?.giftType || giftFromForm(formData).giftType,
     visitors,
     tourType: parseTourType(formData.get("tourType")),
     meetingRoom: String(formData.get("meetingRoom") || ""),
@@ -664,7 +682,7 @@ export async function approveGiftAction(formData: FormData) {
   if (!session) redirect("/login");
   const visitId = String(formData.get("visitId") || "");
   try {
-    await approveGift(session, visitId, String(formData.get("note") || ""));
+    await approveGift(session, visitId, String(formData.get("note") || ""), String(formData.get("linkId") || "") || undefined);
   } catch (error) {
     arrangementFail(formData, visitId, error);
   }
@@ -692,7 +710,7 @@ export async function approveGatePassAction(formData: FormData) {
   if (!session) redirect("/login");
   const visitId = String(formData.get("visitId") || "");
   try {
-    await approveGatePass(session, visitId, String(formData.get("note") || ""));
+    await approveGatePass(session, visitId, String(formData.get("note") || ""), String(formData.get("linkId") || "") || undefined);
   } catch (error) {
     arrangementFail(formData, visitId, error);
   }
@@ -707,7 +725,13 @@ export async function completeGatePassAction(formData: FormData) {
   const visitId = String(formData.get("visitId") || "");
   try {
     const file = formData.get("file");
-    await markGatePassDone(session, visitId, String(formData.get("note") || ""), file instanceof File ? file : null);
+    await markGatePassDone(
+      session,
+      visitId,
+      String(formData.get("note") || ""),
+      file instanceof File ? file : null,
+      String(formData.get("linkId") || "") || undefined,
+    );
   } catch (error) {
     arrangementFail(formData, visitId, error);
   }
@@ -892,7 +916,8 @@ export async function bookRoomTrialAction(formData: FormData) {
       description,
       inviteEmails: formData.getAll("inviteEmail").map(String),
       visitId,
-      purpose: String(formData.get("purpose") || "").trim() || undefined,
+      purpose: String(formData.get("purpose") || "").trim(),
+      visitTitle: String(formData.get("visitTitle") || "").trim(),
       guestMobile: String(formData.get("guestMobile") || "").trim() || undefined,
       guestEmail: String(formData.get("guestEmail") || "").trim() || undefined,
     });
@@ -969,22 +994,26 @@ export async function bookReceptionVisitAction(formData: FormData) {
         company: String(formData.get(`company_${index}`) || ""),
         jobTitle: String(formData.get(`jobTitle_${index}`) || ""),
         nationality: String(formData.get(`nationality_${index}`) || ""),
+        ...personRequest(formData, index),
       });
     }
     const kind = String(formData.get("guestKind") || "GUEST");
     if (!isKnownGuestKind(kind)) throw new Error("Choose a guest type.");
+    const personGift = visitors.find((visitor) => visitor.giftRequired);
     const booked = await createReceptionDeskVisit(session, {
       visitDate: date,
       arrivalTime: clockValue(String(formData.get("start") || formData.get("arrivalTime") || "")),
       departmentId: String(formData.get("departmentId") || ""),
       guestKind: kind,
+      visitTitle: String(formData.get("visitTitle") || ""),
       purpose: String(formData.get("purpose") || ""),
       driverRequired: formData.get("driverRequired") === "yes",
-      gatePassRequired: formData.get("gatePassRequired") === "yes",
-      ...giftFromForm(formData),
+      gatePassRequired: visitors.some((visitor) => visitor.gatePassRequired) || formData.get("gatePassRequired") === "yes",
+      giftRequired: Boolean(personGift) || formData.get("giftRequired") === "yes",
+      giftType: personGift?.giftType || giftFromForm(formData).giftType,
       visitors,
       roomName: String(formData.get("roomName") || ""),
-      endTime: clockValue(String(formData.get("end") || "")),
+      endTime: clockValue(String(formData.get("end") || formData.get("endTime") || "")),
       inviteEmails: formData.getAll("inviteEmail").map(String),
       tourType: parseTourType(formData.get("tourType")),
     });

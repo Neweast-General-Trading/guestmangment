@@ -400,7 +400,7 @@ export type HqRoomBooking = {
   cancelled?: boolean;
 };
 
-function graphDate(value?: string) {
+export function graphDate(value?: string) {
   if (!value) return new Date(NaN);
   const raw = value.replace(/\.0+$/, "");
   if (raw.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(raw)) return new Date(raw);
@@ -462,6 +462,64 @@ export async function listHqRoomBookings(from: Date, to: Date): Promise<HqRoomBo
     cursor = chunkEnd.getTime();
   }
   return out;
+}
+
+export type RoomCalendarBooking = {
+  id: string;
+  roomName: string;
+  roomEmail: string;
+  subject: string;
+  startAt: Date;
+  endAt: Date;
+  organizerName: string;
+  organizerEmail: string;
+  createdAt: Date;
+};
+
+export async function listRoomCalendarBookings(from: Date, to: Date): Promise<RoomCalendarBooking[]> {
+  if (!graphConfigured()) return [];
+  const rooms = await listHqRooms();
+  const start = encodeURIComponent(from.toISOString());
+  const end = encodeURIComponent(to.toISOString());
+  const rows: RoomCalendarBooking[] = [];
+  for (const room of rooms) {
+    try {
+      const data = await graphJson<{
+        value?: {
+          id?: string;
+          subject?: string;
+          isCancelled?: boolean;
+          createdDateTime?: string;
+          start?: { dateTime?: string };
+          end?: { dateTime?: string };
+          organizer?: { emailAddress?: { name?: string; address?: string } };
+        }[];
+      }>(
+        `/users/${encodeURIComponent(room.email)}/calendarView?startDateTime=${start}&endDateTime=${end}&$select=id,subject,start,end,organizer,isCancelled,createdDateTime&$top=80`,
+        { headers: { Prefer: 'outlook.timezone="UTC"' } },
+      );
+      for (const item of data.value || []) {
+        if (item.isCancelled || !item.id) continue;
+        const startAt = graphDate(item.start?.dateTime);
+        const endAt = graphDate(item.end?.dateTime);
+        if (Number.isNaN(startAt.getTime())) continue;
+        rows.push({
+          id: item.id,
+          roomName: room.name,
+          roomEmail: room.email,
+          subject: item.subject?.trim() || "Busy",
+          startAt,
+          endAt: Number.isNaN(endAt.getTime()) ? startAt : endAt,
+          organizerName: item.organizer?.emailAddress?.name?.trim() || "",
+          organizerEmail: (item.organizer?.emailAddress?.address || "").trim().toLowerCase(),
+          createdAt: graphDate(item.createdDateTime),
+        });
+      }
+    } catch {
+      // This room calendar is not readable. The others still notify.
+    }
+  }
+  return rows;
 }
 
 export async function roomsDaySchedule(date: string): Promise<RoomDayRow[]> {
@@ -856,6 +914,63 @@ export async function readEventICalUId(eventId: string, organizerEmail?: string)
     `/users/${box}/events/${encodeURIComponent(eventId)}?$select=id,iCalUId`,
   );
   return event.iCalUId || "";
+}
+
+export async function mailboxAliases(email: string) {
+  const key = email.trim().toLowerCase();
+  if (!key.includes("@")) return [];
+  try {
+    const user = await graphJson<{ mail?: string; userPrincipalName?: string; proxyAddresses?: string[] }>(
+      `/users/${encodeURIComponent(key)}?$select=mail,userPrincipalName,proxyAddresses`,
+    );
+    const aliases = [key, user.mail || "", user.userPrincipalName || "", ...(user.proxyAddresses || []).map((item) => item.replace(/^smtp:/i, ""))];
+    return [...new Set(aliases.map((item) => item.trim().toLowerCase()).filter((item) => item.includes("@")))];
+  } catch {
+    return [key];
+  }
+}
+
+export async function publishMeetingInvitation(
+  eventId: string,
+  people: { email: string; name: string }[],
+  details: string,
+  organizerEmail?: string,
+  subject?: string,
+) {
+  const box = encodeURIComponent((organizerEmail || mailbox()).trim() || mailbox());
+  const event = await graphJson<{ iCalUId?: string; attendees?: GraphAttendee[] }>(
+    `/users/${box}/events/${encodeURIComponent(eventId)}?$select=id,iCalUId,attendees`,
+  );
+  let attendees: GraphAttendee[] = (event.attendees || [])
+    .map((item) => ({
+      type: item.type || "required",
+      emailAddress: {
+        address: item.emailAddress?.address || "",
+        name: item.emailAddress?.name || item.emailAddress?.address || "",
+      },
+    }))
+    .filter((item) => item.emailAddress.address.includes("@"));
+  for (const person of people) attendees = withRequiredAttendee(attendees, person.email, person.name);
+  await graphJson(`/users/${box}/events/${encodeURIComponent(eventId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      ...(subject ? { subject } : {}),
+      body: { contentType: "text", content: details },
+      attendees,
+      responseRequested: true,
+    }),
+  });
+  const savedEvent = await graphJson<{ attendees?: GraphAttendee[] }>(
+    `/users/${box}/events/${encodeURIComponent(eventId)}?$select=attendees`,
+  );
+  const saved = new Set(
+    (savedEvent.attendees || []).map((item) => (item.emailAddress?.address || "").trim().toLowerCase()).filter(Boolean),
+  );
+  return {
+    iCalUId: event.iCalUId || "",
+    saved: [...saved],
+    invited: people.filter((person) => saved.has(person.email.trim().toLowerCase())),
+  };
 }
 
 export async function inviteBookerToGuestEvent(eventId: string, email: string, name: string, organizerEmail?: string) {

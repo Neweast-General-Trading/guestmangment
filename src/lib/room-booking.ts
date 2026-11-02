@@ -7,23 +7,21 @@ function isPendingContact(value?: string | null) {
   return !text || /^(pending:|inbox:)/i.test(text);
 }
 import {
-  acceptBookerMeeting,
   bookGuestRoom,
   cancelGuestRoom,
-  createBookerCalendarEvent,
   deleteUserCalendarEvent,
   guestEventRoomReply,
   graphConfigured,
   guestMailbox,
   listGuestDayEvents,
   inviteBookerToGuestEvent,
-  readEventICalUId,
   roomMailStatus,
   visitCodeFromSubject,
   type GuestDayEvent,
   type InboxHead,
 } from "./graph";
-import { sendBookingChangeEmail, sendRoomConfirmEmail, sendStaffRoomHoldEmail } from "./mail";
+import { sendBookingChangeEmail, sendCalendarInviteEmail, sendStaffRoomHoldEmail } from "./mail";
+import { notifyOutsideRoomBookings } from "./outside-rooms";
 import type { SessionUser } from "./permissions";
 import { prisma } from "./prisma";
 import { guestDocHref, parseGuestDocs } from "./guest-doc-types";
@@ -374,6 +372,7 @@ export async function flushHoldsFromEvents(events: GuestDayEvent[]) {
 }
 
 export async function roomBoardEvents(date: string) {
+  void notifyOutsideRoomBookings().catch(() => undefined);
   const [listed, holds] = await Promise.all([listGuestDayEvents(date), listHoldEventsForDay(date)]);
   const merged = mergeRoomDayEvents(listed, holds);
   await flushHoldsFromEvents(merged).catch(() => undefined);
@@ -384,6 +383,7 @@ export type RoomDeskVisit = {
   id: string;
   visitCode: string;
   purpose: string;
+  visitTitle: string;
   visitDate: string;
   arrival: string;
   source: string;
@@ -393,7 +393,16 @@ export type RoomDeskVisit = {
   tourType: string;
   proposedRoom: string;
   invitees: { email: string; name: string }[];
-  guests: { id: string; fullName: string; mobile: string; email: string; company: string; jobTitle: string }[];
+  guests: {
+    id: string;
+    linkId: string;
+    fullName: string;
+    mobile: string;
+    email: string;
+    company: string;
+    jobTitle: string;
+    docs: { type: "ID" | "PASSPORT" | "VISA"; name: string; href: string }[];
+  }[];
   docs: { type: "ID" | "PASSPORT" | "VISA"; name: string; href: string }[];
 };
 
@@ -420,7 +429,7 @@ export async function listRoomDeskVisits(): Promise<RoomDeskVisit[]> {
     include: {
       createdBy: { select: { name: true } },
       department: { select: { name: true } },
-      visitors: { include: { visitor: true }, orderBy: { isPrimary: "desc" } },
+      visitors: { include: { visitor: true }, orderBy: [{ sortOrder: "asc" }, { isPrimary: "desc" }] },
     },
     orderBy: [{ visitDate: "asc" }, { expectedArrival: "asc" }],
     take: 80,
@@ -429,6 +438,7 @@ export async function listRoomDeskVisits(): Promise<RoomDeskVisit[]> {
     id: row.id,
     visitCode: row.visitCode,
     purpose: row.purpose,
+    visitTitle: row.visitTitle,
     visitDate: dayKey(row.visitDate),
     arrival: clockOf(row.expectedArrival),
     source: row.source,
@@ -438,14 +448,24 @@ export async function listRoomDeskVisits(): Promise<RoomDeskVisit[]> {
     tourType: row.tourType || "NONE",
     proposedRoom: row.meetingRoom || "",
     invitees: parseStoredInvitees(row.colleagueInvitees),
-    guests: row.visitors.map((link) => ({
-      id: link.visitor.id,
-      fullName: link.visitor.fullName,
-      mobile: isPendingContact(link.visitor.mobile) ? "" : link.visitor.mobile,
-      email: link.visitor.email || "",
-      company: link.visitor.company || "",
-      jobTitle: link.visitor.jobTitle || "",
-    })),
+    guests: row.visitors.map((link, index) => {
+      const own = parseGuestDocs(link.attachmentsJson);
+      const legacy = index === 0 && !own.length ? parseGuestDocs(row.attachmentsJson) : [];
+      return {
+        id: link.visitor.id,
+        linkId: link.id,
+        fullName: link.visitor.fullName,
+        mobile: isPendingContact(link.visitor.mobile) ? "" : link.visitor.mobile,
+        email: link.visitor.email || "",
+        company: link.visitor.company || "",
+        jobTitle: link.visitor.jobTitle || "",
+        docs: (own.length ? own : legacy).map((doc) => ({
+          type: doc.type,
+          name: doc.name,
+          href: own.length ? guestDocHref(row.id, doc.type, link.id) : guestDocHref(row.id, doc.type),
+        })),
+      };
+    }),
     docs: parseGuestDocs(row.attachmentsJson).map((doc) => ({
       type: doc.type,
       name: doc.name,
@@ -465,6 +485,7 @@ export async function bookStaffRoomHold(
     inviteEmails?: string[];
     visitId?: string;
     purpose?: string;
+    visitTitle?: string;
     guestMobile?: string;
     guestEmail?: string;
   },
@@ -474,6 +495,7 @@ export async function bookStaffRoomHold(
         id: string;
         visitCode: string;
         purpose: string;
+        visitTitle: string;
         visitors: { visitorId: string; visitor: { id: string; mobile: string; email: string | null; fullName: string } }[];
       }
     | null = null;
@@ -483,8 +505,9 @@ export async function bookStaffRoomHold(
       include: { visitors: { include: { visitor: true }, orderBy: { isPrimary: "desc" } } },
     });
     if (!visit) throw new Error("Visit request was not found.");
-    const purpose = (input.purpose || visit.purpose || "").trim();
-    if (!purpose) throw new Error("Add the purpose of the visit.");
+    const purpose = (input.purpose ?? visit.purpose ?? "").trim();
+    const visitTitle = (input.visitTitle || visit.visitTitle || "").trim();
+    if (!visitTitle) throw new Error("Title of visit is required.");
     const mobile = (input.guestMobile || "").trim();
     const email = (input.guestEmail || "").trim();
     if (email && !email.includes("@")) throw new Error("Guest email is not valid.");
@@ -504,15 +527,17 @@ export async function bookStaffRoomHold(
       where: { id: visit.id },
       data: {
         purpose,
+        visitTitle,
         expectedArrival: input.start,
         expectedDeparture: input.end,
         visitDate: new Date(`${dayKey(input.start)}T00:00:00`),
         meetingRoom: input.roomName,
       },
     });
-    visit = { ...visit, purpose, visitCode: visit.visitCode };
+    visit = { ...visit, purpose, visitTitle, visitCode: visit.visitCode };
   }
   const subject =
+    (visit?.visitTitle || "").trim() ||
     input.subject.trim() ||
     (visit ? `${visit.visitCode} · Guest visit · ${input.roomName}` : "Guest visit room hold");
   const description = (input.description || "").trim().slice(0, 2000);
@@ -569,6 +594,7 @@ export async function bookStaffRoomHold(
       note: booked.roomName,
       userId: actor.id,
     });
+    await sendRoomConfirmReply(visit.id).catch(() => undefined);
   }
   return booked;
 }
@@ -583,7 +609,7 @@ async function bookingPeople(eventId?: string | null, visitId?: string | null) {
   const people = new Map<string, string>();
   const add = (email?: string | null, name?: string | null) => {
     const key = (email || "").trim().toLowerCase();
-    if (!/@(neweast\.com|neweast\.co)$/i.test(key)) return;
+    if (!/@(neweast\.com|neweast\.co|aisin\.ae)$/i.test(key)) return;
     if (!people.has(key)) people.set(key, (name || "").trim() || key.split("@")[0] || key);
   };
   if (eventId) {
@@ -691,6 +717,68 @@ async function namedAdmin(emails: readonly string[], name: string) {
   return { email: (user?.email || emails[0] || "").toLowerCase(), name: user?.name || name };
 }
 
+async function invitationPeople(visit: {
+  createdBy?: { email: string; name: string } | null;
+  colleagueInvitees?: string | null;
+  guestKind?: string | null;
+  type?: string | null;
+  tourType?: string | null;
+  emailFrom?: string | null;
+  outlookEventId?: string | null;
+  visitors: { visitor: { email: string | null; fullName?: string | null } }[];
+}) {
+  const people = new Map<string, string>();
+  const add = (email?: string | null, name?: string | null) => {
+    const key = (email || "").trim().toLowerCase();
+    if (!/@(neweast\.com|neweast\.co|aisin\.ae)$/i.test(key)) return;
+    if (!people.has(key)) people.set(key, (name || "").trim() || key.split("@")[0] || key);
+  };
+  const guestEmails = new Set(
+    visit.visitors.map((link) => (link.visitor.email || "").trim().toLowerCase()).filter((email) => email.includes("@")),
+  );
+  if (visit.outlookEventId) {
+    const hold = await prisma.roomHold.findFirst({
+      where: { eventId: visit.outlookEventId, cancelledAt: null },
+      select: { invitees: true },
+    });
+    for (const person of parseStoredInvitees(hold?.invitees)) {
+      if (!guestEmails.has(person.email)) add(person.email, person.name);
+    }
+  }
+  if (visit.createdBy && !guestEmails.has(visit.createdBy.email.trim().toLowerCase())) {
+    add(visit.createdBy.email, visit.createdBy.name);
+  }
+  const from = (visit.emailFrom || "").trim().toLowerCase();
+  if (from && !guestEmails.has(from)) add(from, from.split("@")[0]);
+  for (const person of parseStoredInvitees(visit.colleagueInvitees)) {
+    if (!guestEmails.has(person.email)) add(person.email, person.name);
+  }
+  const kind = (visit.guestKind || visit.type || "").toUpperCase();
+  const tour = (visit.tourType || "").toUpperCase();
+  if (kind === "CUSTOMER") {
+    const admin = await namedAdmin(SAMIR_EMAILS, "Samir Ibrahim");
+    add(admin.email, admin.name);
+  }
+  if (kind === "SUPPLIER") {
+    const hanna = await namedAdmin(HANNA_EMAILS, "Hannah Talastas");
+    const salma = await namedAdmin(SALMA_EMAILS, "Salma Moufallah");
+    add(hanna.email, hanna.name);
+    add(salma.email, salma.name);
+  }
+  if (tour === "GF" || tour === "BUILDING") {
+    const hanna = await namedAdmin(HANNA_EMAILS, "Hannah Talastas");
+    const salma = await namedAdmin(SALMA_EMAILS, "Salma Moufallah");
+    const jesman = await namedAdmin(JESMAN_EMAILS, "Jesman Muruganantham");
+    add(hanna.email, hanna.name);
+    add(salma.email, salma.name);
+    add(jesman.email, jesman.name);
+  }
+  for (const email of [...people.keys()]) {
+    if (guestEmails.has(email)) people.delete(email);
+  }
+  return [...people].map(([email, name]) => ({ email, name }));
+}
+
 async function loadConfirmPeople(hold: { eventId: string; invitees: string }) {
   const visit = await prisma.visit.findFirst({
     where: { outlookEventId: hold.eventId },
@@ -699,45 +787,10 @@ async function loadConfirmPeople(hold: { eventId: string; invitees: string }) {
       visitors: { include: { visitor: { select: { email: true, fullName: true } } } },
     },
   });
-  const people = new Map<string, string>();
-  const add = (email?: string | null, name?: string | null) => {
-    const key = (email || "").trim().toLowerCase();
-    if (!/@(neweast\.com|neweast\.co)$/i.test(key)) return;
-    if (!people.has(key)) people.set(key, (name || "").trim() || key.split("@")[0] || key);
-  };
-  const guestEmails = new Set(
-    (visit?.visitors || []).map((link) => (link.visitor.email || "").trim().toLowerCase()).filter((email) => email.includes("@")),
-  );
-  for (const person of parseStoredInvitees(hold.invitees)) {
-    if (!guestEmails.has(person.email)) add(person.email, person.name);
+  if (!visit) {
+    return parseStoredInvitees(hold.invitees).filter((person) => /@(neweast\.com|neweast\.co|aisin\.ae)$/i.test(person.email));
   }
-  if (visit) {
-    add(visit.createdBy.email, visit.createdBy.name);
-    for (const person of parseStoredInvitees(visit.colleagueInvitees)) {
-      if (!guestEmails.has(person.email)) add(person.email, person.name);
-    }
-    const kind = (visit.guestKind || visit.type || "").toUpperCase();
-    const tour = (visit.tourType || "").toUpperCase();
-    if (kind === "CUSTOMER") {
-      const admin = await namedAdmin(SAMIR_EMAILS, "Samir Ibrahim");
-      add(admin.email, admin.name);
-    }
-    if (kind === "SUPPLIER") {
-      const hanna = await namedAdmin(HANNA_EMAILS, "Hannah Talastas");
-      const salma = await namedAdmin(SALMA_EMAILS, "Salma Moufallah");
-      add(hanna.email, hanna.name);
-      add(salma.email, salma.name);
-    }
-    if (tour === "GF" || tour === "BUILDING") {
-      const hanna = await namedAdmin(HANNA_EMAILS, "Hannah Talastas");
-      const salma = await namedAdmin(SALMA_EMAILS, "Salma Moufallah");
-      const jesman = await namedAdmin(JESMAN_EMAILS, "Jesman Muruganantham");
-      add(hanna.email, hanna.name);
-      add(salma.email, salma.name);
-      add(jesman.email, jesman.name);
-    }
-  }
-  return [...people].map(([email, name]) => ({ email, name }));
+  return invitationPeople(visit);
 }
 
 async function confirmHoldCalendars(holdId: string) {
@@ -757,45 +810,18 @@ async function confirmHoldCalendars(holdId: string) {
     });
   } else if (!hold.bookerEventId) {
     try {
-      const invited = await inviteBookerToGuestEvent(hold.eventId, hold.bookedByEmail, hold.bookedByName, organizer);
+      await inviteBookerToGuestEvent(hold.eventId, hold.bookedByEmail, hold.bookedByName, organizer);
       await prisma.roomHold.update({ where: { id: hold.id }, data: { bookerInvitedAt: new Date() } });
-      const acceptedId = invited.iCalUId ? await acceptBookerMeeting(hold.bookedByEmail, invited.iCalUId) : null;
-      if (acceptedId) {
-        await prisma.roomHold.update({ where: { id: hold.id }, data: { bookerEventId: acceptedId } });
-      }
     } catch {
-      const bookerEventId = await createBookerCalendarEvent(hold.bookedByEmail, {
-        subject: hold.subject,
-        description: hold.description,
-        start: hold.startAt,
-        end: hold.endAt,
-        roomName: hold.roomName,
-        roomEmail: hold.roomEmail,
-      });
-      await prisma.roomHold.update({
-        where: { id: hold.id },
-        data: { bookerEventId, bookerInvitedAt: new Date() },
-      });
+      // The meeting request is the calendar item. A separate event is not written.
     }
   }
   const pinned = new Set(parseStoredInvitees(hold.pinnedAttendees).map((item) => item.email));
   const pending = people.filter((guest) => !pinned.has(guest.email) && guest.email !== organizer);
   if (!pending.length) return;
-  const iCalUId = await readEventICalUId(hold.eventId, organizer).catch(() => "");
   const delivered = [...parseStoredInvitees(hold.pinnedAttendees)];
   for (const guest of pending) {
     await inviteBookerToGuestEvent(hold.eventId, guest.email, guest.name, organizer);
-    const acceptedId = iCalUId ? await acceptBookerMeeting(guest.email, iCalUId).catch(() => null) : null;
-    if (!acceptedId && /@(neweast\.com|neweast\.co)$/i.test(guest.email)) {
-      await createBookerCalendarEvent(guest.email, {
-        subject: hold.subject,
-        description: hold.description,
-        start: hold.startAt,
-        end: hold.endAt,
-        roomName: hold.roomName,
-        roomEmail: hold.roomEmail,
-      }).catch(() => undefined);
-    }
     delivered.push(guest);
     await prisma.roomHold.update({
       where: { id: hold.id },
@@ -809,13 +835,21 @@ async function sendHoldReply(holdId: string, accepted: boolean) {
   if (!hold || hold.cancelledAt) return { sent: false as const };
   const linked = await prisma.visit.findFirst({
     where: { outlookEventId: hold.eventId },
-    select: { tourType: true, tourStatus: true, guestKind: true, type: true, supplierStatus: true },
+    select: { tourType: true, tourStatus: true, guestKind: true, type: true, supplierStatus: true, roomConfirmRepliedAt: true },
   });
   if (accepted && linked && visitBlocksConfirm(linked)) return { sent: false as const };
   if (!hold.repliedAt) {
+    if (linked?.roomConfirmRepliedAt || accepted) {
+      await prisma.roomHold.update({
+        where: { id: hold.id },
+        data: { repliedAt: new Date(), roomReply: accepted ? "accepted" : "declined" },
+      });
+      if (accepted) await confirmHoldCalendars(holdId);
+      return { sent: true as const };
+    }
     const stored = parseStoredInvitees(hold.invitees);
-    const audience = accepted ? await loadConfirmPeople(hold) : stored.filter((person) => person.email.includes("@"));
-    if (!accepted && audience.length) {
+    const audience = stored.filter((person) => person.email.includes("@"));
+    if (audience.length) {
       const linkedVisit = await prisma.visit.findFirst({
         where: { outlookEventId: hold.eventId },
         include: { visitors: { include: { visitor: { select: { email: true } } } } },
@@ -834,7 +868,7 @@ async function sendHoldReply(holdId: string, accepted: boolean) {
       ...audience,
     ].filter(
       (item, index, list) =>
-        /@(neweast\.com|neweast\.co)$/i.test(item.email) &&
+        /@(neweast\.com|neweast\.co|aisin\.ae)$/i.test(item.email) &&
         list.findIndex((row) => row.email.toLowerCase() === item.email.toLowerCase()) === index,
     );
     for (const person of recipients) {
@@ -859,52 +893,65 @@ async function sendHoldReply(holdId: string, accepted: boolean) {
   return { sent: true as const };
 }
 
-export async function sendRoomConfirmReply(visitId: string) {
-  const visit = await prisma.visit.findUnique({
-    where: { id: visitId },
-    include: { visitors: { include: { visitor: true } }, createdBy: { select: { id: true, email: true, name: true } } },
-  });
-  if (!visit || visit.roomConfirmRepliedAt) return { sent: false as const };
-  if (visitBlocksConfirm(visit)) return { sent: false as const };
-  const guestEmails = new Set(
-    visit.visitors.map((link) => (link.visitor.email || "").trim().toLowerCase()).filter((email) => email.includes("@")),
-  );
-  const recipients = [visit.createdBy.email.trim(), visit.emailFrom?.trim() || ""].filter(
-    (email, index, list) =>
-      /@(neweast\.com|neweast\.co)$/i.test(email) &&
-      !guestEmails.has(email.toLowerCase()) &&
-      list.findIndex((item) => item.toLowerCase() === email.toLowerCase()) === index,
-  );
-  if (!recipients.length) return { sent: false as const };
-
+function meetingWhen(visit: { expectedArrival: Date; expectedDeparture?: Date | null }) {
   const end =
     visit.expectedDeparture && visit.expectedDeparture > visit.expectedArrival
       ? visit.expectedDeparture
       : new Date(visit.expectedArrival.getTime() + 60 * 60 * 1000);
-  await sendRoomConfirmEmail({
-    to: recipients,
-    subject: `Your meeting room is ready · ${visit.visitCode}`,
-    date: fmtDate(visit.expectedArrival),
-    start: fmtTime(visit.expectedArrival),
-    end: fmtTime(end),
-    room: visit.meetingRoom || "Meeting room",
-    guests: visit.visitors.map((link) => ({
-      name: link.visitor.fullName,
-      company: link.visitor.company,
-      jobTitle: link.visitor.jobTitle,
-    })),
-    guestCount: visit.visitorCount,
-    visitCode: visit.visitCode,
-    inReplyTo: visit.emailMessageId,
+  return end;
+}
+
+function meetingDetails(visit: { meetingRoom: string | null; expectedArrival: Date }) {
+  return [fmtDate(visit.expectedArrival), visit.meetingRoom || "Meeting room"].join("\n");
+}
+
+async function deliverRoomConfirm(visitId: string) {
+  const visit = await prisma.visit.findUnique({
+    where: { id: visitId },
+    include: { visitors: { include: { visitor: true } }, createdBy: { select: { id: true, email: true, name: true } } },
   });
+  if (!visit || visit.calendarInvitedAt || visitBlocksConfirm(visit) || !visit.meetingRoom) {
+    return { sent: false as const, recipients: [] as { email: string; name: string }[] };
+  }
+  const recipients = await invitationPeople(visit);
+  if (!recipients.length) return { sent: false as const, recipients };
+  const end = meetingWhen(visit);
+  const details = meetingDetails(visit);
+  const originator = visit.createdBy.name.trim() || "NEWEAST";
+  const title = visit.visitTitle.trim();
+  const subject = title ? `${title} - ${originator}` : originator;
+  const guestEmails = new Set(
+    visit.visitors.map((link) => (link.visitor.email || "").trim().toLowerCase()).filter((email) => email.includes("@")),
+  );
+  const audience = recipients.filter((person) => !guestEmails.has(person.email));
+  if (!audience.length) return { sent: false as const, recipients: [] };
+  const uid = `${visit.id}@guest.neweast.co`;
+  for (const person of audience) {
+    await sendCalendarInviteEmail({
+      to: person.email,
+      name: person.name,
+      fromName: originator,
+      subject,
+      details,
+      start: visit.expectedArrival,
+      end,
+      location: visit.meetingRoom || "Meeting room",
+      uid,
+    });
+  }
   await prisma.visit.update({
     where: { id: visitId },
     data: {
-      roomConfirmRepliedAt: new Date(),
+      calendarInvitedAt: new Date(),
+      roomConfirmRepliedAt: visit.roomConfirmRepliedAt || new Date(),
       intakeNotes: markReplyDone(visit.intakeNotes),
     },
   });
-  await addTimeline({ visitId, event: "Room confirm emailed", note: "Reply done" });
+  await addTimeline({
+    visitId,
+    event: "Calendar invitation sent",
+    note: audience.map((person) => person.email).join(", "),
+  });
   const names = visit.visitors.map((link) => link.visitor.fullName).filter(Boolean);
   await notify({
     userId: visit.createdBy.id,
@@ -920,7 +967,66 @@ export async function sendRoomConfirmReply(visitId: string) {
     onBehalfOf: visit.createdBy.name,
   }).catch(() => undefined);
   await briefVisitStakeholders(visitId).catch(() => undefined);
-  return { sent: true as const };
+  return { sent: true as const, recipients: audience };
+}
+
+export async function sendRoomConfirmReply(visitId: string) {
+  return deliverRoomConfirm(visitId);
+}
+
+export async function calendarInvitePlan(from: Date) {
+  const visits = await prisma.visit.findMany({
+    where: {
+      expectedArrival: { gte: from },
+      meetingRoom: { not: null },
+      status: { notIn: ["CANCELLED", "REJECTED", "DRAFT"] },
+      calendarInvitedAt: null,
+    },
+    include: {
+      createdBy: { select: { email: true, name: true } },
+      visitors: { include: { visitor: { select: { email: true, fullName: true } } } },
+    },
+    orderBy: { expectedArrival: "asc" },
+  });
+  const plan = [];
+  for (const visit of visits) {
+    if (!visit.meetingRoom || visitBlocksConfirm(visit)) continue;
+    const people = await invitationPeople(visit);
+    plan.push({
+      visitCode: visit.visitCode,
+      when: visit.expectedArrival.toISOString(),
+      room: visit.meetingRoom,
+      outlook: Boolean(visit.outlookEventId),
+      people: people.map((person) => person.email),
+    });
+  }
+  return plan;
+}
+
+export async function emailOutstandingInvitationPeople(from: Date) {
+  const visits = await prisma.visit.findMany({
+    where: {
+      expectedArrival: { gte: from },
+      meetingRoom: { not: null },
+      status: { notIn: ["CANCELLED", "REJECTED", "DRAFT"] },
+    },
+    select: { id: true, visitCode: true, roomConfirmRepliedAt: true },
+    orderBy: { expectedArrival: "asc" },
+  });
+  const sent: { visitCode: string; recipients: { email: string; name: string }[]; error?: string }[] = [];
+  for (const visit of visits) {
+    try {
+      const result = await deliverRoomConfirm(visit.id);
+      if (result.sent) sent.push({ visitCode: visit.visitCode, recipients: result.recipients });
+    } catch (error) {
+      sent.push({
+        visitCode: visit.visitCode,
+        recipients: [],
+        error: error instanceof Error ? error.message : "Invitation failed.",
+      });
+    }
+  }
+  return sent;
 }
 
 export async function releaseVisitConfirmations(visitId: string) {

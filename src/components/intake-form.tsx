@@ -19,6 +19,7 @@ import { emptyVisitor, type ParsedVisitor } from "@/lib/email-template";
 
 export type IntakeFormVisit = {
   id: string;
+  visitTitle: string;
   purpose: string;
   visitDate: string;
   expectedArrival: string;
@@ -30,7 +31,7 @@ export type IntakeFormVisit = {
   driverName: string;
   driverMobile: string;
   driverVehicle: string;
-  visitors: ParsedVisitor[];
+  visitors: (ParsedVisitor & { docs?: { type: GuestDocType; name: string; href: string }[] })[];
   tourType?: string | null;
   locked: boolean;
   docs?: { type: GuestDocType; name: string; href: string }[];
@@ -50,7 +51,7 @@ export function IntakeForm({
   const [driverRequired, setDriverRequired] = useState(visit.driverRequired);
   const [visitDate, setVisitDate] = useState(visit.visitDate);
   const [arrival, setArrival] = useState(visit.expectedArrival);
-  const [visitors, setVisitors] = useState(
+  const [visitors, setVisitors] = useState<IntakeFormVisit["visitors"]>(
     visit.visitors.length ? visit.visitors : [emptyVisitor()],
   );
 
@@ -91,8 +92,11 @@ export function IntakeForm({
           <TourField defaultValue={visit.tourType} />
         </div>
         <div className="mt-4">
-          <Field label="Purpose" required>
-            <Textarea name="purpose" defaultValue={visit.purpose} required disabled={visit.locked} />
+          <Field label="Title of visit" required>
+            <TextInput name="visitTitle" defaultValue={visit.visitTitle} required disabled={visit.locked} placeholder="Title shown on the invitation" />
+          </Field>
+          <Field label="Visit details">
+            <Textarea name="purpose" defaultValue={visit.purpose} disabled={visit.locked} placeholder="Optional" />
           </Field>
         </div>
       </section>
@@ -127,12 +131,13 @@ export function IntakeForm({
                 <TextInput name={`visitor_${index}_jobTitle`} placeholder="Job title" defaultValue={visitor.jobTitle} disabled={visit.locked} />
                 <TextInput name={`visitor_${index}_nationality`} placeholder="Nationality" defaultValue={visitor.nationality} disabled={visit.locked} />
               </div>
+              <div className="mt-3">
+                <GuestDocFields index={index} guestName={visitor.fullName || `Visitor ${index + 1}`} docs={visitor.docs || (index === 0 ? visit.docs : [])} disabled={visit.locked} />
+              </div>
             </div>
           ))}
         </div>
       </section>
-
-      <GuestDocFields docs={visit.docs || []} disabled={visit.locked} />
 
       <section className="rounded-2xl border border-[var(--line)] bg-white p-5">
         <h2 className="text-sm font-semibold">Driver</h2>

@@ -292,6 +292,14 @@ export async function ensureHqLogins() {
     });
   }
 
+  const sachini = await prisma.user.findUnique({ where: { email: "sachini@neweast.com" } });
+  if (sachini) {
+    await prisma.user.update({
+      where: { id: sachini.id },
+      data: { role: "HR_ADMIN", isActive: true, accessGroup: "ADMINISTRATION" },
+    });
+  }
+
   const guru = await prisma.user.findUnique({ where: { email: "guru@neweast.co" } });
   if (guru) {
     await prisma.user.update({

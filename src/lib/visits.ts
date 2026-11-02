@@ -20,7 +20,7 @@ export const visitInclude = {
   department: true,
   checkInBy: true,
   checkOutBy: true,
-  visitors: { include: { visitor: true }, orderBy: { isPrimary: "desc" as const } },
+  visitors: { include: { visitor: true }, orderBy: [{ sortOrder: "asc" as const }, { isPrimary: "desc" as const }] },
   vehicles: true,
   approvals: { include: { assignee: { include: { department: true } } }, orderBy: { stepOrder: "asc" as const } },
   timeline: { orderBy: { createdAt: "asc" as const } },

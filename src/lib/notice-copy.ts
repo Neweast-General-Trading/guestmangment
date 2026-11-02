@@ -24,7 +24,7 @@ export function noticeCta(type: string) {
   if (type === "DRIVER_NEEDED") return "Open driver requests";
   if (type === "SUPPLIER_APPROVAL" || type === "BUILDING_TOUR") return "Open building tour";
   if (type === "GIFT_READY" || type === "GATE_PASS_READY" || type === "INTAKE_READY") {
-    return "Open intake";
+    return "Open request";
   }
   if (type === "DRIVER_UPDATE" || type === "GIFT_UPDATE" || type === "GATE_PASS_UPDATE") return "Open request";
   if (type === "PARKING_ASSIGNED") return "Open intranet";

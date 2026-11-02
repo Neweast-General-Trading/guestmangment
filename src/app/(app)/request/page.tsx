@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { StaffRequestForm } from "@/components/staff-request-form";
-import { StatusPill, TypeTag } from "@/components/status";
+import { VisitStatus, TypeTag } from "@/components/status";
 import { Card, Empty, PageHeader } from "@/components/ui";
 import { canUseRequestDesk, isRoomBooker } from "@/lib/access";
 import { requireSession } from "@/lib/auth";
@@ -37,7 +37,7 @@ export default async function StaffRequestPage({
     listRoomInvitePeople(),
     prisma.visit.findMany({
       where: { source: "STAFF", createdById: session.id },
-      include: { visitors: { include: { visitor: true }, take: 1 }, department: true },
+      include: { visitors: { include: { visitor: true } }, department: true, createdBy: true },
       orderBy: { createdAt: "desc" },
       take: 80,
     }),
@@ -138,23 +138,27 @@ export default async function StaffRequestPage({
               return (
                 <Link key={visit.id} href={`/request/${visit.id}`} className="block">
                   <Card>
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[13px] font-semibold">{visit.visitCode}</span>
-                        <TypeTag>{GUEST_KIND_LABEL[kind]}</TypeTag>
-                        <StatusPill status={visit.status} />
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-[15px] font-medium leading-snug">
+                          {(visit.visitTitle || visit.purpose || "Guest visit").trim()} - {visit.createdBy.name}
+                        </div>
+                        <div className="mt-1 text-[13px] text-[var(--muted)]">{visit.meetingRoom || "Room not set"}</div>
                       </div>
-                      <span className="text-[12px] text-[var(--muted)]">{fmtDateTime(visit.createdAt)}</span>
+                      <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                        <TypeTag>{GUEST_KIND_LABEL[kind]}</TypeTag>
+                        <VisitStatus visit={visit} />
+                      </div>
                     </div>
-                    <p className="mt-2 text-[13px]">{visit.purpose}</p>
-                    <p className="mt-1 text-[12px] text-[var(--muted)]">
-                      {fmtDateTime(visit.expectedArrival)} · {guest || `${visit.visitorCount} guests`}
-                      {visit.status === "INTAKE" ? " · With reception" : ""}
-                      {visit.driverRequired ? " · Driver" : ""}
-                      {visit.giftRequired ? ` · Gift${visit.giftType ? ` (${visit.giftType})` : ""}` : ""}
-                      {visit.gatePassRequired ? " · Gate pass" : ""}
-                      {` · ${visit.meetingRoom || "N/A"}`}
-                    </p>
+                    <div className="mt-3 flex items-end justify-between gap-3 border-t border-[var(--line)] pt-2">
+                      <p className="text-[12px] text-[var(--muted)]">
+                        {fmtDateTime(visit.expectedArrival)} · {guest || `${visit.visitorCount} guests`}
+                        {visit.driverRequired ? " · Driver" : ""}
+                        {visit.giftRequired ? ` · Gift${visit.giftType ? ` (${visit.giftType})` : ""}` : ""}
+                        {visit.gatePassRequired ? " · Gate pass" : ""}
+                      </p>
+                      <div className="shrink-0 text-[11px] text-[var(--faint)]">{visit.visitCode}</div>
+                    </div>
                   </Card>
                 </Link>
               );

@@ -1,9 +1,9 @@
 import Link from "next/link";
-import { Inbox, MailOpen, ShieldAlert, UserRound } from "lucide-react";
+import { Inbox, MailOpen, ShieldAlert } from "lucide-react";
 import { importEmailAction, syncInboxAction } from "@/app/actions";
 import { CopyButton } from "@/components/copy-button";
 import { InboxAutoSync } from "@/components/inbox-auto-sync";
-import { StatusPill, TypeTag } from "@/components/status";
+import { VisitStatus, TypeTag } from "@/components/status";
 import { Button, Card, PageHeader, TextInput, Textarea } from "@/components/ui";
 import { requireSession } from "@/lib/auth";
 import { guestRequestTemplate } from "@/lib/email-template";
@@ -11,6 +11,7 @@ import { GUEST_KIND_LABEL, type GuestKind } from "@/lib/constants";
 import { fmtDateTime } from "@/lib/format";
 import { peekInbox } from "@/lib/inbox-sync";
 import { isDummyMail, roomMailStatus, roomMailTitle, visitCodeFromSubject, type InboxHead } from "@/lib/graph";
+import { preparationLabel } from "@/lib/preparation";
 import { canManageIntake } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { visitInclude } from "@/lib/visits";
@@ -58,7 +59,7 @@ export default async function IntakePage({
     ...otherRequests.map((mail) => ({ key: mail.id, at: Date.parse(mail.receivedAt) || 0, mail })),
   ].sort((a, b) => b.at - a.at);
   const counts = {
-    intake: visits.filter((item) => item.status === "INTAKE").length,
+    intake: visits.filter((item) => preparationLabel(item) === "Preparing").length,
     escalated: visits.filter((item) => item.tourType === "BUILDING" && item.tourStatus === "PENDING").length,
     rooms: inbox.rooms.length,
   };
@@ -93,13 +94,13 @@ export default async function IntakePage({
       <InboxAutoSync />
 
       <div className="mb-5 grid gap-3 sm:grid-cols-3">
-        <Stat icon={Inbox} label="New intake" value={counts.intake} />
+        <Stat icon={Inbox} label="Preparing" value={counts.intake} />
         <Stat icon={ShieldAlert} label="Building tours" value={counts.escalated} />
         <Stat icon={MailOpen} label="Room replies" value={counts.rooms} />
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_360px] xl:items-start">
-        <section className="flex min-h-0 flex-col">
+      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.6fr)_minmax(280px,0.9fr)]">
+        <section className="min-w-0 rounded-2xl border border-[var(--line)] bg-white p-4">
           <SectionTitle
             title="Visit requests"
             count={requestRows.length}
@@ -123,46 +124,34 @@ export default async function IntakePage({
                   <Link
                     key={row.key}
                     href={`/intake/${visit.id}`}
-                    className="block rounded-2xl border border-[var(--line)] bg-white p-4 shadow-[0_1px_0_rgba(20,32,31,0.03)] hover:border-[var(--line-strong)]"
+                    className="block rounded-xl border border-[var(--line)] bg-[#fcfafa] p-4 hover:border-[var(--line-strong)] hover:bg-white"
                   >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[13px] font-semibold">{visit.visitCode}</span>
-                        <TypeTag type={KIND_TONE[kind]}>{GUEST_KIND_LABEL[kind]}</TypeTag>
-                        <StatusPill status={visit.status} />
-                        {visit.source === "STAFF" ? <TypeTag>Staff request</TypeTag> : null}
-                      </div>
-                      <span className="text-[12px] text-[var(--muted)]">{fmtDateTime(visit.createdAt)}</span>
-                    </div>
-                    <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                      <div>
-                        <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--faint)]">Visitor</div>
-                        <div className="text-[13px] font-medium">{guest?.fullName || "—"}</div>
-                        <div className="text-[12px] text-[var(--muted)]">{guest?.company || guest?.mobile}</div>
-                      </div>
-                      <div>
-                        <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--faint)]">When / department</div>
-                        <div className="text-[13px] font-medium">{fmtDateTime(visit.expectedArrival)}</div>
-                        <div className="text-[12px] text-[var(--muted)]">{visit.department.name}</div>
-                      </div>
-                      <div>
-                        <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--faint)]">Prep</div>
-                        <div className="text-[13px] font-medium">
-                          {visit.visitorCount} {visit.visitorCount === 1 ? "guest" : "guests"}
-                          {visit.driverRequired ? " · Driver" : ""}
-                          {visit.giftRequired ? " · Gift" : ""}
-                          {visit.gatePassRequired ? " · Gate pass" : ""}
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-[15px] font-medium leading-snug text-[var(--ink)]">
+                          {(visit.visitTitle || visit.purpose || "Guest visit").trim()} - {visit.createdBy?.name || "NEWEAST"}
                         </div>
-                        <div className="text-[12px] text-[var(--muted)]">{visit.meetingRoom || "Room not set"}</div>
+                        <div className="mt-1 text-[13px] text-[var(--muted)]">
+                          {visit.meetingRoom || "Room not set"}
+                          <span className="text-[var(--faint)]"> · {fmtDateTime(visit.expectedArrival)}</span>
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                        <TypeTag type={KIND_TONE[kind]}>{GUEST_KIND_LABEL[kind]}</TypeTag>
+                        <VisitStatus visit={visit} />
                       </div>
                     </div>
-                    {visit.source === "STAFF" || visit.emailSubject || visit.emailFrom ? (
-                      <div className="mt-3 flex items-center gap-2 text-[12px] text-[var(--muted)]">
-                        <UserRound size={13} strokeWidth={1.75} />
-                        {visit.source === "STAFF" ? visit.createdBy?.name || "Staff" : visit.emailFrom || "Inbox"}
-                        {visit.emailSubject ? ` · ${visit.emailSubject}` : ""}
+                    <div className="mt-3 flex items-end justify-between gap-3 border-t border-[var(--line)] pt-2">
+                      <div className="min-w-0 text-[12px] text-[var(--muted)]">
+                        <span className="text-[var(--ink)]">{guest?.fullName || "Guest not named"}</span>
+                        {guest?.company ? ` · ${guest.company}` : ""}
+                        {` · ${visit.visitorCount} ${visit.visitorCount === 1 ? "guest" : "guests"}`}
+                        {visit.driverRequired ? " · Driver" : ""}
+                        {visit.giftRequired ? " · Gift" : ""}
+                        {visit.gatePassRequired ? " · Gate pass" : ""}
                       </div>
-                    ) : null}
+                      <div className="shrink-0 text-right text-[11px] text-[var(--faint)]">{visit.visitCode}</div>
+                    </div>
                     {visit.roomConfirmRepliedAt ? (
                       <div className="mt-2 text-[12px] font-medium text-[#2f7d6d]">Notes · Reply done</div>
                     ) : null}
@@ -173,13 +162,14 @@ export default async function IntakePage({
           </div>
         </section>
 
-        <section className="flex min-h-0 flex-col">
+        <aside className="space-y-4">
+        <section className="rounded-2xl border border-[var(--line)] bg-white p-4">
           <SectionTitle
             title="Meeting room replies"
             count={inbox.rooms.length}
             hint="Newest first · accepted and declined mail from the rooms"
           />
-          <div className="mt-3 max-h-[calc(100vh-16rem)] space-y-3 overflow-y-auto overscroll-contain pr-1">
+          <div className="mt-3 max-h-80 space-y-3 overflow-y-auto overscroll-contain pr-1">
             {inbox.rooms.length === 0 ? (
               <Card>
                 <p className="text-sm font-medium">No meeting-room replies in the inbox.</p>
@@ -196,7 +186,6 @@ export default async function IntakePage({
           </div>
         </section>
 
-        <aside className="space-y-4">
           <Card>
             <div className="flex items-start justify-between gap-2">
               <div>
@@ -213,7 +202,7 @@ export default async function IntakePage({
                 Excel
               </a>
             </div>
-            <pre className="mt-3 max-h-72 overflow-auto rounded-xl bg-[#f7f4f4] p-3 text-[11px] leading-5 text-[var(--ink)]">
+            <pre className="mt-3 max-h-36 overflow-auto rounded-xl border border-[var(--line)] bg-[#f7f4f4] p-3 text-[11px] leading-5 text-[var(--ink)]">
               {template}
             </pre>
           </Card>

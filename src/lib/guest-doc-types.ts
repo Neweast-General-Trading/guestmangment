@@ -38,6 +38,11 @@ export function parseGuestDocs(raw?: string | null): GuestDoc[] {
   }
 }
 
-export function guestDocHref(visitId: string, type: GuestDocType) {
-  return `/api/guest-docs/${visitId}/${type}`;
+export function guestDocHref(visitId: string, type: GuestDocType, linkId?: string, stored?: string) {
+  const params = new URLSearchParams();
+  if (linkId) params.set("link", linkId);
+  if (stored) params.set("file", stored);
+  const query = params.toString();
+  const base = `/api/guest-docs/${visitId}/${type}`;
+  return query ? `${base}?${query}` : base;
 }

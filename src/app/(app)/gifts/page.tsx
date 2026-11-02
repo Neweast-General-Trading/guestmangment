@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { ArrangementDesk } from "@/components/arrangement-desk";
 import { ArrangementPill } from "@/components/arrangement-status";
-import { StatusPill, TypeTag } from "@/components/status";
+import { VisitStatus, TypeTag } from "@/components/status";
 import { Card, PageHeader } from "@/components/ui";
 import { requireSession } from "@/lib/auth";
 import { GUEST_KIND_LABEL, type GuestKind } from "@/lib/constants";
@@ -52,22 +52,24 @@ export default async function GiftRequestsPage({
             return (
               <Card key={visit.id} padded={false}>
                 <div className="border-b border-[var(--line)] px-4 py-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-[13px] font-semibold">{visit.visitCode}</span>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-[15px] font-medium">{(visit.visitTitle || visit.purpose || "Guest visit").trim()} - {visit.createdBy.name}</div>
+                      <div className="mt-1 text-[13px] text-[var(--muted)]">{visit.meetingRoom || "Room not set"}</div>
+                    </div>
+                    <div className="flex shrink-0 flex-wrap justify-end gap-1">
                       <TypeTag>{GUEST_KIND_LABEL[kind]}</TypeTag>
-                      <StatusPill status={visit.status} />
+                      <VisitStatus visit={visit} />
                       <ArrangementPill status={visit.giftStatus} />
                     </div>
-                    <span className="text-[12px] text-[var(--muted)]">{fmtDateTime(visit.expectedArrival)}</span>
                   </div>
-                  <p className="mt-2 text-[15px] font-medium">{guest}</p>
-                  <p className="mt-1 text-[13px] text-[var(--muted)]">
-                    {visit.department.name}
-                    {visit.host?.name ? ` · Host ${visit.host.name}` : ""}
-                    {` · Requested by ${visit.createdBy.name}`}
-                  </p>
-                  <p className="mt-2 text-[13px]">{visit.purpose}</p>
+                  <div className="mt-3 flex items-end justify-between gap-3">
+                    <p className="text-[13px] text-[var(--muted)]">
+                      {guest} · {visit.department.name}
+                      {visit.host?.name ? ` · Host ${visit.host.name}` : ""} · {fmtDateTime(visit.expectedArrival)}
+                    </p>
+                    <div className="shrink-0 text-[11px] text-[var(--faint)]">{visit.visitCode}</div>
+                  </div>
                 </div>
                 <div className="px-4 py-3">
                   <ArrangementDesk

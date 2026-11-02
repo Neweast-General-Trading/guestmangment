@@ -70,6 +70,7 @@ model Visit {
   visitCode           String         @unique
   type                String
   status              String
+  visitTitle          String         @default("")
   purpose             String
   description         String?
   visitDate           DateTime
@@ -159,6 +160,7 @@ model Visit {
   outlookEventId        String?
   outlookRoomEmail      String?
   roomConfirmRepliedAt  DateTime?
+  calendarInvitedAt     DateTime?
   tourType              String?        @default("NONE")
   tourStatus            String?
   briefingSentAt        DateTime?
@@ -181,12 +183,22 @@ model Visit {
 }
 
 model VisitVisitor {
-  id        String  @id @default(cuid())
-  visitId   String
-  visit     Visit   @relation(fields: [visitId], references: [id], onDelete: Cascade)
-  visitorId String
-  visitor   Visitor @relation(fields: [visitorId], references: [id])
-  isPrimary Boolean @default(false)
+  id               String  @id @default(cuid())
+  visitId          String
+  visit            Visit   @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  visitorId        String
+  visitor          Visitor @relation(fields: [visitorId], references: [id])
+  isPrimary        Boolean @default(false)
+  sortOrder        Int     @default(0)
+  attachmentsJson  String?
+  gatePassRequired Boolean @default(false)
+  gatePassStatus   String?
+  gatePassNote     String?
+  gatePassFile     String?
+  giftRequired     Boolean @default(false)
+  giftType         String?
+  giftStatus       String?
+  giftNote         String?
 }
 
 model Vehicle {
@@ -408,4 +420,16 @@ model RoomHold {
 
   @@index([bookedById])
   @@index([subject])
+}
+
+model OutsideRoomNotice {
+  id             String   @id @default(cuid())
+  eventKey       String   @unique
+  roomName       String
+  startAt        DateTime
+  endAt          DateTime
+  organizerName  String
+  organizerEmail String
+  subject        String
+  notifiedAt     DateTime @default(now())
 }

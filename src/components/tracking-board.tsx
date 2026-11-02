@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { StatusPill, TypeTag } from "@/components/status";
+import { VisitStatus, TypeTag } from "@/components/status";
 import { Card, inputClass } from "@/components/ui";
 import { STATUS_LABEL, VISIT_STATUSES } from "@/lib/constants";
 import { fmtDate, fmtDateTime, fmtTime, typeLabel } from "@/lib/format";
@@ -260,12 +260,12 @@ export function TrackingVisits({ visits }: { visits: Data["visits"] }) {
               <tr key={visit.id}>
                 <td>
                   <Link href={`/visits/${visit.id}`} className="font-medium hover:underline">
-                    {visit.visitCode}
+                    {(visit.visitTitle || visit.purpose || "Guest visit").trim()} - {visit.createdBy.name}
                   </Link>
-                  <div className="text-[12px] text-[var(--muted)]">
-                    {trackingSourceLabel(visit.source)} · {visit.department.name}
+                  <div className="text-[12px] text-[var(--muted)]">{visit.meetingRoom || visit.location || "Room not set"}</div>
+                  <div className="text-right text-[11px] text-[var(--faint)]">
+                    {visit.visitCode} · {trackingSourceLabel(visit.source)}
                   </div>
-                  <div className="text-[12px] text-[var(--muted)]">{visit.purpose}</div>
                 </td>
                 <td>
                   <div className="font-medium">{guestsOf(visit)}</div>
@@ -306,7 +306,7 @@ export function TrackingVisits({ visits }: { visits: Data["visits"] }) {
                   {visit.entryGate ? <div>{visit.entryGate}</div> : null}
                 </td>
                 <td>
-                  <StatusPill status={visit.status} />
+                  <VisitStatus visit={visit} />
                 </td>
               </tr>
             );

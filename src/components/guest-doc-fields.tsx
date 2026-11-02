@@ -4,16 +4,20 @@ import { GUEST_DOC_SLOTS, type GuestDocType } from "@/lib/guest-doc-types";
 export function GuestDocFields({
   docs = [],
   disabled = false,
+  index = 0,
+  guestName,
 }: {
   docs?: { type: GuestDocType; name: string; href: string }[];
   disabled?: boolean;
+  index?: number;
+  guestName?: string;
 }) {
   return (
     <section className="space-y-3">
       <div>
-        <h2 className="text-sm font-semibold">Documents</h2>
+        <h2 className="text-sm font-semibold">{guestName ? `Documents · ${guestName}` : "Documents"}</h2>
         <p className="mt-1 text-[12px] text-[var(--muted)]">
-          Optional. Upload an ID, passport, or visa. You can submit the request without any of them.
+          Optional for this guest. Upload an ID, passport, or visa. Each guest has their own files.
         </p>
       </div>
       <div className="grid gap-3 sm:grid-cols-3">
@@ -22,7 +26,7 @@ export function GuestDocFields({
           return (
             <div key={slot.id} className="rounded-2xl border border-[var(--line)] bg-[#fcfafa] p-3">
               <Field label={slot.label}>
-                <input className={inputClass} type="file" name={`doc_${slot.id}`} accept=".pdf,.png,.jpg,.jpeg,.webp" disabled={disabled} />
+                <input className={inputClass} type="file" name={`doc_${index}_${slot.id}`} accept=".pdf,.png,.jpg,.jpeg,.webp" disabled={disabled} />
               </Field>
               {current ? (
                 <a className="mt-2 inline-block text-[12px] font-medium text-[var(--brand-ink)]" href={current.href}>

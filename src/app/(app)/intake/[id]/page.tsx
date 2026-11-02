@@ -4,14 +4,15 @@ import { decideEscalationAction } from "@/app/actions";
 import { ArrangementDesk } from "@/components/arrangement-desk";
 import { FormBusy } from "@/components/form-busy";
 import { IntakeForm } from "@/components/intake-form";
-import { StatusPill, TypeTag } from "@/components/status";
+import { VisitStatus, TypeTag } from "@/components/status";
 import { Button, Card, PageHeader, Textarea } from "@/components/ui";
 import { arrangementHint } from "@/lib/arrangement-types";
 import { requireSession } from "@/lib/auth";
 import { GUEST_KIND_LABEL, type GuestKind } from "@/lib/constants";
 import { meetingRoomOptions } from "@/lib/graph";
 import { fmtDateTime } from "@/lib/format";
-import { canApproveGatePass, canApproveGift, canCompleteDriver, canDecideEscalation, canManageIntake } from "@/lib/permissions";
+import { GuestAttachmentList } from "@/components/guest-attachments";
+import { canApproveGatePass, canApproveGift, canCompleteDriver, canDecideEscalation, canManageIntake, isGatePassApprover } from "@/lib/permissions";
 import { guestDocHref, parseGuestDocs } from "@/lib/guest-doc-types";
 import { canEditStaffRequest } from "@/lib/staff-request";
 import { prisma } from "@/lib/prisma";
@@ -38,16 +39,17 @@ export default async function IntakeDetailPage({
   const locked = !["INTAKE", "ESCALATED"].includes(visit.status);
   const canEdit = canManageIntake(session.role) && visit.status === "INTAKE";
   const canDecide = visit.status === "ESCALATED" && canDecideEscalation(session);
+  const seeDocs = isGatePassApprover(session);
 
   return (
     <div>
       <PageHeader
-        title={visit.visitCode}
-        description={`${GUEST_KIND_LABEL[kind]} request from ${visit.source === "STAFF" ? visit.createdBy.name : visit.emailFrom || "the guest inbox"}`}
+        title={`${(visit.visitTitle || visit.purpose || "Guest visit").trim()} - ${visit.createdBy.name}`}
+        description={`${visit.meetingRoom || "Room not set"} · ${visit.visitCode}`}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <TypeTag type={kind}>{GUEST_KIND_LABEL[kind]}</TypeTag>
-            <StatusPill status={visit.status} />
+            <VisitStatus visit={visit} />
             {visit.source === "STAFF" && canEditStaffRequest(session, visit) ? (
               <Button href={`/request/${visit.id}`} variant="secondary">
                 Edit all details
@@ -183,6 +185,25 @@ export default async function IntakeDetailPage({
         </Card>
       ) : null}
 
+      {seeDocs ? (
+        <Card className="mb-5">
+          <h2 className="text-sm font-semibold">Attachments</h2>
+          <p className="mt-1 text-[12px] text-[var(--muted)]">Files uploaded with this visit request. Use them before you upload the gate pass.</p>
+          <div className="mt-3">
+            <GuestAttachmentList
+              visitId={visit.id}
+              attachmentsJson={visit.attachmentsJson}
+              showEmpty
+              people={visit.visitors.map((link) => ({
+                id: link.id,
+                name: link.visitor.fullName,
+                attachmentsJson: link.attachmentsJson,
+              }))}
+            />
+          </div>
+        </Card>
+      ) : null}
+
       {locked ? (
         <Card>
           <p className="text-[13px]">
@@ -197,6 +218,7 @@ export default async function IntakeDetailPage({
         <IntakeForm
           visit={{
             id: visit.id,
+            visitTitle: visit.visitTitle,
             purpose: visit.purpose,
             visitDate: todayStamp(visit.visitDate),
             expectedArrival: timeStamp(visit.expectedArrival),
@@ -208,21 +230,34 @@ export default async function IntakeDetailPage({
             driverName: visit.driverName || "",
             driverMobile: visit.driverMobile || "",
             driverVehicle: visit.driverVehicle || "",
-            visitors: visit.visitors.map((link) => ({
-              fullName: link.visitor.fullName,
-              mobile: link.visitor.mobile.startsWith("inbox:") || link.visitor.mobile.startsWith("pending:") ? "" : link.visitor.mobile,
-              email: link.visitor.email || "",
-              company: link.visitor.company || "",
-              jobTitle: link.visitor.jobTitle || "",
-              nationality: link.visitor.nationality || "",
-            })),
+            visitors: visit.visitors.map((link, index) => {
+              const own = parseGuestDocs(link.attachmentsJson);
+              const legacy = index === 0 && !own.length ? parseGuestDocs(visit.attachmentsJson) : [];
+              return {
+                fullName: link.visitor.fullName,
+                mobile: link.visitor.mobile.startsWith("inbox:") || link.visitor.mobile.startsWith("pending:") ? "" : link.visitor.mobile,
+                email: link.visitor.email || "",
+                company: link.visitor.company || "",
+                jobTitle: link.visitor.jobTitle || "",
+                nationality: link.visitor.nationality || "",
+                docs: seeDocs
+                  ? (own.length ? own : legacy).map((doc) => ({
+                      type: doc.type,
+                      name: doc.name,
+                      href: own.length ? guestDocHref(visit.id, doc.type, link.id) : guestDocHref(visit.id, doc.type),
+                    }))
+                  : [],
+              };
+            }),
             tourType: visit.tourType,
             locked: !canEdit,
-            docs: parseGuestDocs(visit.attachmentsJson).map((doc) => ({
-              type: doc.type,
-              name: doc.name,
-              href: guestDocHref(visit.id, doc.type),
-            })),
+            docs: seeDocs
+              ? parseGuestDocs(visit.attachmentsJson).map((doc) => ({
+                  type: doc.type,
+                  name: doc.name,
+                  href: guestDocHref(visit.id, doc.type),
+                }))
+              : [],
           }}
           hosts={hosts.map((user) => ({
             value: user.id,

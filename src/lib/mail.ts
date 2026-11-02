@@ -213,6 +213,64 @@ export async function sendRoomConfirmEmail(input: {
   await sendOut(mail);
 }
 
+function icsStamp(date: Date) {
+  return date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+}
+
+function icsText(value: string) {
+  return value.replace(/\\/g, "\\\\").replace(/\r?\n/g, "\\n").replace(/,/g, "\\,").replace(/;/g, "\\;");
+}
+
+export async function sendCalendarInviteEmail(input: {
+  to: string;
+  name: string;
+  fromName: string;
+  subject: string;
+  details: string;
+  start: Date;
+  end: Date;
+  location: string;
+  uid: string;
+}) {
+  if (!guestMailEnabled()) throw new Error("Guest mailbox send is not configured.");
+  const { box } = guestFrom();
+  const to = tidyEmail(input.to);
+  if (!to) return;
+  const fromName = input.fromName.trim() || "NEWEAST Guest Management";
+  const from = `"${fromName.replace(/["\\]/g, "")}" <${box}>`;
+  const envelope = mailEnvelope(to);
+  const ics = [
+    "BEGIN:VCALENDAR",
+    "PRODID:-//NEWEAST//Guest Management//EN",
+    "VERSION:2.0",
+    "CALSCALE:GREGORIAN",
+    "METHOD:REQUEST",
+    "BEGIN:VEVENT",
+    `UID:${input.uid}`,
+    `DTSTAMP:${icsStamp(new Date())}`,
+    `DTSTART:${icsStamp(input.start)}`,
+    `DTEND:${icsStamp(input.end)}`,
+    `SUMMARY:${icsText(input.subject)}`,
+    `LOCATION:${icsText(input.location)}`,
+    `DESCRIPTION:${icsText(input.details)}`,
+    `ORGANIZER;CN=${icsText(fromName)}:mailto:${box}`,
+    `ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN=${icsText(input.name)}:mailto:${to}`,
+    "STATUS:CONFIRMED",
+    "SEQUENCE:0",
+    "END:VEVENT",
+    "END:VCALENDAR",
+  ].join("\r\n");
+  await getGuestTransporter().sendMail({
+    from,
+    replyTo: box,
+    to: envelope.to,
+    ...(envelope.bcc ? { bcc: envelope.bcc } : {}),
+    subject: input.subject,
+    text: input.details,
+    icalEvent: { filename: "meeting.ics", method: "REQUEST", content: ics },
+  });
+}
+
 export function greetFirstName(name: string) {
   return name.trim().split(/\s+/).filter(Boolean)[0] || "there";
 }
@@ -248,6 +306,30 @@ export function staffRoomHoldMailCopy(input: {
     when,
     note,
   };
+}
+
+export async function sendOutsideRoomEmail(input: {
+  to: string[];
+  room: string;
+  when: string;
+  bookedBy: string;
+  subject: string;
+}) {
+  const text = [
+    "A meeting room was booked in Outlook, outside Guest Management.",
+    "",
+    `Room: ${input.room}`,
+    `When: ${input.when}`,
+    `Booked by: ${input.bookedBy}`,
+    input.subject ? `Subject: ${input.subject}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  await sendOut({
+    to: input.to,
+    subject: `Room booked outside Guest Management · ${input.room}`,
+    text,
+  });
 }
 
 export async function sendStaffRoomHoldEmail(input: {

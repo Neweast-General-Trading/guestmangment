@@ -1,0 +1,55 @@
+import { parseTourType } from "./constants";
+
+type PersonPrep = {
+  visitor?: { fullName?: string | null };
+  gatePassRequired?: boolean | null;
+  gatePassStatus?: string | null;
+  giftRequired?: boolean | null;
+  giftStatus?: string | null;
+};
+
+export type PreparationVisit = {
+  status: string;
+  meetingRoom?: string | null;
+  driverRequired?: boolean | null;
+  driverStatus?: string | null;
+  gatePassRequired?: boolean | null;
+  gatePassStatus?: string | null;
+  giftRequired?: boolean | null;
+  giftStatus?: string | null;
+  tourType?: string | null;
+  tourStatus?: string | null;
+  visitors?: PersonPrep[];
+};
+
+function roomReady(visit: PreparationVisit) {
+  const room = (visit.meetingRoom || "").trim();
+  return Boolean(room) && !/^n\/?a$/i.test(room) && room !== "Yes";
+}
+
+function listReady(
+  people: PersonPrep[] | undefined,
+  personRequired: (person: PersonPrep) => boolean | null | undefined,
+  personStatus: (person: PersonPrep) => string | null | undefined,
+  required: boolean | null | undefined,
+  status: string | null | undefined,
+) {
+  const marked = (people || []).filter((person) => personRequired(person));
+  if (marked.length) return marked.every((person) => personStatus(person) === "DONE");
+  return !required || status === "DONE";
+}
+
+export function preparationReady(visit: PreparationVisit) {
+  if (parseTourType(visit.tourType) === "BUILDING" && visit.tourStatus !== "APPROVED") return false;
+  if (!roomReady(visit)) return false;
+  if (visit.driverRequired && visit.driverStatus !== "DONE") return false;
+  if (!listReady(visit.visitors, (person) => person.gatePassRequired, (person) => person.gatePassStatus, visit.gatePassRequired, visit.gatePassStatus)) return false;
+  if (!listReady(visit.visitors, (person) => person.giftRequired, (person) => person.giftStatus, visit.giftRequired, visit.giftStatus)) return false;
+  if (Array.isArray(visit.visitors) && visit.visitors.length === 0) return false;
+  return true;
+}
+
+export function preparationLabel(visit: PreparationVisit) {
+  if (visit.status !== "INTAKE") return undefined;
+  return preparationReady(visit) ? "Ready" : "Preparing";
+}

@@ -39,6 +39,9 @@ assert.equal(isOperationalStaff({ isActive: true, payrollNo: "1", role: "EMPLOYE
 assert.equal(isOperationalStaff({ isActive: true, payrollNo: "1", role: "HR_ADMIN", jobTitle: "Executive" }), false);
 assert.ok(ownerEmailsFor("HOTEL", "stay").includes("deepak.rana@neweast.com"));
 assert.ok(ownerEmailsFor("GREETING", "protocol").includes("frontdesk@neweast.com"));
+assert.ok(ownerEmailsFor("GREETING", "protocol").includes("sachini@neweast.com"));
+assert.ok(ownerEmailsFor("LUNCH", "meals").includes("sachini@neweast.com"));
+assert.equal(ownerEmailsFor("DRIVER", "transport").includes("sachini@neweast.com"), false);
 assert.ok(!ownerEmailsFor("LUNCH", "meals").includes("olga@neweast.co"));
 assert.ok(ownerEmailsFor("DRIVER", "transport").includes("waylslym27@gmail.com"));
 

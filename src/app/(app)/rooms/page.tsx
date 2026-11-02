@@ -3,7 +3,7 @@ import { Card, PageHeader } from "@/components/ui";
 import { requireSession } from "@/lib/auth";
 import { attachGuestEvents, guestMailbox, graphConfigured, roomsDaySchedule } from "@/lib/graph";
 import { isRoomBooker, isRoomsViewer } from "@/lib/access";
-import { canManageIntake, homeFor } from "@/lib/permissions";
+import { canManageIntake, homeFor, isGatePassApprover } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { flushRoomConfirmReplies, listRoomDeskVisits, listRoomInvitePeople, roomBoardEvents } from "@/lib/room-booking";
 import { redirect } from "next/navigation";
@@ -71,7 +71,7 @@ export default async function RoomsPage({
       ) : null}
       {query.booked ? (
         <p className="mb-4 rounded-md border border-[#d7e6da] bg-[var(--tint-sage)] px-3 py-2 text-[13px]">
-          Room booked. When the room confirms, {guestMailbox()} emails the requester, invited colleagues, and the administration contact for this visit. Guests are not invited.
+          Room booked. {guestMailbox()} emails the people on the invitation now. Guests are not included.
         </p>
       ) : null}
       {query.cancelled ? (
@@ -95,7 +95,17 @@ export default async function RoomsPage({
           mailbox={guestMailbox()}
           bookerEmail={session.email}
           people={people}
-          deskVisits={manage ? deskVisits : []}
+          deskVisits={
+            manage
+              ? isGatePassApprover(session)
+                ? deskVisits
+                : deskVisits.map((visit) => ({
+                    ...visit,
+                    docs: [],
+                    guests: visit.guests.map((guest) => ({ ...guest, docs: [] })),
+                  }))
+              : []
+          }
           departments={departments}
           manage={manage}
         />

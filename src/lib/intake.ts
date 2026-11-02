@@ -11,9 +11,9 @@ import { extractGuestRequest } from "./extract-visit";
 import type { ParsedGuestRequest } from "./email-template";
 import { GUEST_KIND_LABEL, type GuestKind, type TourType } from "./constants";
 import { canManageIntake, canDecideEscalation, type SessionUser } from "./permissions";
-import { syncOutlookRoom } from "./room-booking";
-import { isDeskSource, notifyStaffVisitConfirmed } from "./staff-request";
-import { applyTourType, briefVisitStakeholders, syncSupplierApproval, visitBlocksConfirm } from "./tours";
+import { sendRoomConfirmReply, syncOutlookRoom } from "./room-booking";
+import { isDeskSource } from "./staff-request";
+import { applyTourType, syncSupplierApproval, visitBlocksConfirm } from "./tours";
 
 const HIDDEN_HOST = "olga@neweast.co";
 const ADMIN_EMAIL = "adminsatror@neweast.co";
@@ -110,11 +110,13 @@ export async function createIntakeFromParsed(
   );
 
   const purpose = parsed.purpose.trim() || `Email visit request${meta.subject ? ` — ${meta.subject}` : ""}`;
+  const visitTitle = (meta.subject || purpose).trim();
   const visit = await prisma.visit.create({
     data: {
       visitCode: await nextVisitCode(),
       type: visitTypeFromKind(kind),
       status: "INTAKE",
+      visitTitle,
       purpose,
       visitDate: new Date(`${visitDate}T00:00:00`),
       expectedArrival: combineVisitDateTime(visitDate, arrival),
@@ -137,6 +139,7 @@ export async function createIntakeFromParsed(
         create: visitors.map((visitor, index) => ({
           visitorId: visitor.id,
           isPrimary: index === 0,
+          sortOrder: index,
         })),
       },
     },
@@ -193,6 +196,7 @@ export async function updateIntakeVisit(
     departmentId: string;
     hostId?: string;
     guestKind: GuestKind;
+    visitTitle: string;
     purpose: string;
     meetingRoom?: string;
     driverRequired: boolean;
@@ -216,7 +220,9 @@ export async function updateIntakeVisit(
     throw new Error("This request is no longer on the intake desk.");
   }
   if (!input.visitors.length) throw new Error("At least one visitor is required.");
-  if (!input.purpose.trim()) throw new Error("Purpose is required.");
+  const visitTitle = input.visitTitle.trim();
+  if (!visitTitle) throw new Error("Title of visit is required.");
+  const purpose = input.purpose.trim();
 
   const visitors = await Promise.all(
     input.visitors.map((visitor) =>
@@ -231,11 +237,14 @@ export async function updateIntakeVisit(
       }),
     ),
   );
+  const previous = await prisma.visitVisitor.findMany({ where: { visitId } });
+  const previousByVisitor = new Map(previous.map((link) => [link.visitorId, link]));
   await prisma.visitVisitor.deleteMany({ where: { visitId } });
   await prisma.visit.update({
     where: { id: visitId },
     data: {
-      purpose: input.purpose.trim(),
+      visitTitle,
+      purpose,
       visitDate: new Date(`${input.visitDate}T00:00:00`),
       expectedArrival: combineVisitDateTime(input.visitDate, input.expectedArrival),
       departmentId: input.departmentId,
@@ -251,10 +260,23 @@ export async function updateIntakeVisit(
       pickupRequired: input.driverRequired,
       visitorCount: visitors.length,
       visitors: {
-        create: visitors.map((visitor, index) => ({
-          visitorId: visitor.id,
-          isPrimary: index === 0,
-        })),
+        create: visitors.map((visitor, index) => {
+          const old = previousByVisitor.get(visitor.id);
+          return {
+            visitorId: visitor.id,
+            isPrimary: index === 0,
+            sortOrder: index,
+            attachmentsJson: old?.attachmentsJson || null,
+            gatePassRequired: old?.gatePassRequired || false,
+            gatePassStatus: old?.gatePassStatus || null,
+            gatePassNote: old?.gatePassNote || null,
+            gatePassFile: old?.gatePassFile || null,
+            giftRequired: old?.giftRequired || false,
+            giftType: old?.giftType || null,
+            giftStatus: old?.giftStatus || null,
+            giftNote: old?.giftNote || null,
+          };
+        }),
       },
     },
   });
@@ -303,8 +325,7 @@ export async function confirmIntake(
   });
   const ready = await prisma.visit.findUnique({ where: { id: visitId } });
   if (ready && !visitBlocksConfirm(ready)) {
-    await notifyStaffVisitConfirmed(visitId).catch(() => undefined);
-    await briefVisitStakeholders(visitId).catch(() => undefined);
+    await sendRoomConfirmReply(visitId).catch(() => undefined);
   }
 }
 
@@ -401,8 +422,12 @@ export async function submitIntake(actor: SessionUser, visitId: string) {
   if (visit.driverRequired && visit.driverStatus !== "DONE") {
     throw new Error("Sachini confirms the driver before this visit can be submitted.");
   }
-  if (visit.gatePassRequired && visit.gatePassStatus !== "DONE") {
-    throw new Error("Wait for Reception to approve the gate pass and upload it.");
+  const personalPasses = visit.visitors.filter((link) => link.gatePassRequired);
+  const passesReady = personalPasses.length
+    ? personalPasses.every((link) => link.gatePassStatus === "DONE")
+    : !visit.gatePassRequired || visit.gatePassStatus === "DONE";
+  if (!passesReady) {
+    throw new Error("Upload a gate pass for each guest before submitting.");
   }
   if (!visit.visitors.length) throw new Error("Add at least one visitor before submitting.");
   assertFutureVisit(todayStamp(visit.expectedArrival), timeStamp(visit.expectedArrival));

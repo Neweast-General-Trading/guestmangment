@@ -3,19 +3,22 @@
 import Link from "next/link";
 import { ApprovalSummary } from "@/components/approval-track";
 import { PagedList } from "@/components/paged-list";
-import { StatusPill, TypeTag } from "@/components/status";
+import { VisitStatus, TypeTag } from "@/components/status";
 import { fmtDate, fmtTime, typeLabel } from "@/lib/format";
 
 type VisitRow = {
   id: string;
   visitCode: string;
+  visitTitle?: string;
   purpose: string;
   status: string;
   type: string;
   location: string | null;
   visitDate: Date | string;
   expectedArrival: Date | string;
+  meetingRoom?: string | null;
   host: { name: string };
+  createdBy?: { name: string };
   department: { name: string };
   visitors: { visitor: { fullName: string; company: string | null; mobile: string } }[];
   approvals: { requiredRole: string; status: string; stepName: string; assignee?: { name: string; department?: { name: string } | null } | null }[];
@@ -23,7 +26,7 @@ type VisitRow = {
 
 function visitSearch(visit: VisitRow) {
   const names = visit.visitors.map((link) => `${link.visitor.fullName} ${link.visitor.company} ${link.visitor.mobile}`).join(" ");
-  return `${visit.visitCode} ${visit.purpose} ${visit.host.name} ${visit.department.name} ${visit.status} ${visit.type} ${names}`;
+  return `${visit.visitCode} ${visit.visitTitle} ${visit.purpose} ${visit.host.name} ${visit.department.name} ${visit.status} ${visit.type} ${names}`;
 }
 
 export function VisitTable({
@@ -56,9 +59,10 @@ export function VisitTable({
                   <tr key={visit.id}>
                     <td>
                       <Link href={`/visits/${visit.id}`} className="font-medium hover:underline">
-                        {visit.visitCode}
+                        {(visit.visitTitle || visit.purpose || "Guest visit").trim()} - {visit.createdBy?.name || visit.host.name}
                       </Link>
-                      <div className="text-[12px] text-[var(--muted)]">{visit.department.name}</div>
+                      <div className="text-[12px] text-[var(--muted)]">{visit.meetingRoom || "Room not set"}</div>
+                      <div className="text-right text-[11px] text-[var(--faint)]">{visit.visitCode}</div>
                     </td>
                     <td>
                       <div className="font-medium">{visitor?.fullName ?? "—"}</div>
@@ -79,7 +83,7 @@ export function VisitTable({
                       <ApprovalSummary visit={visit} />
                     </td>
                     <td>
-                      <StatusPill status={visit.status} />
+                      <VisitStatus visit={visit} />
                     </td>
                   </tr>
                 );

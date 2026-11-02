@@ -59,6 +59,11 @@ assert.ok(navFor("EMPLOYEE", "sachini@neweast.com").some((item) => item.href ===
 assert.ok(navFor("EMPLOYEE", "sachini@neweast.com").some((item) => item.href === "/drivers"));
 assert.ok(navFor("EMPLOYEE", "sachinialwis1993@gmail.com").some((item) => item.href === "/rooms"));
 assert.equal(navFor("EMPLOYEE", "sachini@neweast.com").some((item) => item.href === "/intake"), false);
+assert.ok(navFor("HR_ADMIN", "sachini@neweast.com").some((item) => item.href === "/intake"));
+assert.ok(navFor("HR_ADMIN", "sachini@neweast.com").some((item) => item.href === "/passes"));
+assert.ok(navFor("HR_ADMIN", "sachini@neweast.com").some((item) => item.href === "/drivers"));
+assert.ok(navFor("HR_ADMIN", "sachini@neweast.com").some((item) => item.href === "/assign-parking"));
+assert.equal(navFor("HR_ADMIN", "sachini@neweast.com").some((item) => item.href === "/access"), false);
 assert.equal(canManageAccess("SAKOUR@neweast.co"), true);
 assert.equal(canManageAccess("sakour@neweast.com"), false);
 assert.equal(canManageAccess("olga@neweast.co"), false);

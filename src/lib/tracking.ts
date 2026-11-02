@@ -1,6 +1,7 @@
 import { addDays, endOfDay, startOfDay, subDays } from "date-fns";
 import { listHqRoomBookings, sameRoom, type HqRoomBooking } from "./graph";
 import { peekInbox } from "./inbox-sync";
+import { notifyOutsideRoomBookings } from "./outside-rooms";
 import { matches } from "./paging";
 import { prisma } from "./prisma";
 
@@ -134,7 +135,7 @@ export function mergeTrackingRooms(
       origin: "outlook",
     });
   }
-  return newestFirst(rows, (row) => row.createdAt.getTime() || row.startAt.getTime());
+  return newestFirst(rows, (row) => row.startAt.getTime());
 }
 
 function newestFirst<T>(rows: T[], time: (row: T) => number) {
@@ -186,6 +187,7 @@ export function trackingHref(input: TrackingQuery) {
 }
 
 export async function loadTracking(filters: TrackingQuery) {
+  void notifyOutsideRoomBookings().catch(() => undefined);
   const q = filters.q?.trim() || "";
   const tab = trackingTab(filters.tab);
   const window = outlookWindow(filters.from, filters.to);
@@ -243,11 +245,11 @@ export async function loadTracking(filters: TrackingQuery) {
       if (!q) return true;
       const guests = visit.visitors.map((link) => `${link.visitor.fullName} ${link.visitor.company} ${link.visitor.email} ${link.visitor.mobile}`).join(" ");
       return matches(
-        `${visit.visitCode} ${visit.purpose} ${visit.status} ${visit.type} ${visit.source} ${visit.host.name} ${visit.createdBy.name} ${visit.department.name} ${visit.meetingRoom} ${guests}`,
+        `${visit.visitCode} ${visit.visitTitle} ${visit.purpose} ${visit.status} ${visit.type} ${visit.source} ${visit.host.name} ${visit.createdBy.name} ${visit.department.name} ${visit.meetingRoom} ${guests}`,
         q,
       );
     }),
-    (visit) => visit.createdAt.getTime(),
+    (visit) => visit.expectedArrival.getTime(),
   );
 
   const mergedRooms = mergeTrackingRooms(
@@ -288,7 +290,7 @@ export async function loadTracking(filters: TrackingQuery) {
       q,
     );
     }),
-    (row) => row.createdAt.getTime() || row.startAt.getTime(),
+    (row) => row.startAt.getTime(),
   );
 
   const parkingRows = newestFirst(

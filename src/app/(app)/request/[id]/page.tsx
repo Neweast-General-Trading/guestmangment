@@ -1,13 +1,13 @@
 import { notFound, redirect } from "next/navigation";
 import { ArrangementPill } from "@/components/arrangement-status";
 import { StaffRequestForm, type StaffRequestEdit } from "@/components/staff-request-form";
-import { StatusPill, TypeTag } from "@/components/status";
+import { VisitStatus, TypeTag } from "@/components/status";
 import { Button, Card, PageHeader } from "@/components/ui";
 import { arrangementHint } from "@/lib/arrangement-types";
 import { requireSession } from "@/lib/auth";
 import { GUEST_KIND_LABEL, type GuestKind } from "@/lib/constants";
-import { fmtDateTime } from "@/lib/format";
-import { canSeeAllVisits } from "@/lib/permissions";
+import { fmtDateTime, fmtTime } from "@/lib/format";
+import { canSeeAllVisits, isGatePassApprover } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { listRoomInvitePeople, parseStoredInvitees } from "@/lib/room-booking";
 import { guestDocHref, parseGuestDocs } from "@/lib/guest-doc-types";
@@ -31,7 +31,7 @@ export default async function StaffRequestDetailPage({
       department: true,
       createdBy: true,
       lineManager: true,
-      visitors: { include: { visitor: true }, orderBy: { isPrimary: "desc" } },
+      visitors: { include: { visitor: true }, orderBy: [{ sortOrder: "asc" }, { isPrimary: "desc" }] },
     },
   });
   if (!visit || visit.source !== "STAFF") notFound();
@@ -44,6 +44,7 @@ export default async function StaffRequestDetailPage({
 
   const kind = (visit.guestKind || "GUEST") as GuestKind;
   const canEdit = canEditStaffRequest(session, visit);
+  const seeDocs = isGatePassApprover(session) || visit.createdById === session.id;
   const [departments, people] = canEdit
     ? await Promise.all([
         prisma.department.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
@@ -55,32 +56,42 @@ export default async function StaffRequestDetailPage({
         id: visit.id,
         visitDate: todayStamp(visit.expectedArrival),
         arrivalTime: timeStamp(visit.expectedArrival),
+        endTime: visit.expectedDeparture ? timeStamp(visit.expectedDeparture) : "",
         departmentId: visit.departmentId,
         guestKind: visit.guestKind || "GUEST",
         tourType: visit.tourType || "NONE",
         meetingRoom: visit.meetingRoom || "",
+        visitTitle: visit.visitTitle,
         purpose: visit.purpose,
         driverRequired: visit.driverRequired,
-        gatePassRequired: visit.gatePassRequired,
-        giftRequired: visit.giftRequired,
-        giftType: visit.giftType || "",
-        guests: visit.visitors.map((link) => ({
-          fullName: link.visitor.fullName,
-          mobile:
-            link.visitor.mobile.startsWith("pending:") || link.visitor.mobile.startsWith("inbox:")
-              ? ""
-              : link.visitor.mobile,
-          email: link.visitor.email || "",
-          company: link.visitor.company || "",
-          jobTitle: link.visitor.jobTitle || "",
-          nationality: link.visitor.nationality || "",
-        })),
+        guests: visit.visitors.map((link, index) => {
+          const own = parseGuestDocs(link.attachmentsJson);
+          const legacy = index === 0 && !own.length ? parseGuestDocs(visit.attachmentsJson) : [];
+          const markedPass = visit.visitors.some((item) => item.gatePassRequired);
+          const markedGift = visit.visitors.some((item) => item.giftRequired);
+          return {
+            fullName: link.visitor.fullName,
+            mobile:
+              link.visitor.mobile.startsWith("pending:") || link.visitor.mobile.startsWith("inbox:")
+                ? ""
+                : link.visitor.mobile,
+            email: link.visitor.email || "",
+            company: link.visitor.company || "",
+            jobTitle: link.visitor.jobTitle || "",
+            nationality: link.visitor.nationality || "",
+            gatePassRequired: link.gatePassRequired || (!markedPass && visit.gatePassRequired),
+            giftRequired: link.giftRequired || (!markedGift && visit.giftRequired),
+            giftType: link.giftType || visit.giftType || "Welcome gift",
+            docs: seeDocs
+              ? (own.length ? own : legacy).map((doc) => ({
+                  type: doc.type,
+                  name: doc.name,
+                  href: own.length ? guestDocHref(visit.id, doc.type, link.id) : guestDocHref(visit.id, doc.type),
+                }))
+              : [],
+          };
+        }),
         invitees: parseStoredInvitees(visit.colleagueInvitees),
-        docs: parseGuestDocs(visit.attachmentsJson).map((doc) => ({
-          type: doc.type,
-          name: doc.name,
-          href: guestDocHref(visit.id, doc.type),
-        })),
       }
     : null;
   const docs = parseGuestDocs(visit.attachmentsJson);
@@ -88,12 +99,12 @@ export default async function StaffRequestDetailPage({
   return (
     <div className="mx-auto max-w-3xl">
       <PageHeader
-        title={visit.visitCode}
-        description={`Requested by ${visit.createdBy.name}`}
+        title={`${(visit.visitTitle || visit.purpose || "Guest visit").trim()} - ${visit.createdBy.name}`}
+        description={`${visit.meetingRoom || "Room not set"} · ${visit.visitCode}`}
         actions={
           <div className="flex items-center gap-2">
             <TypeTag>{GUEST_KIND_LABEL[kind]}</TypeTag>
-            <StatusPill status={visit.status} />
+            <VisitStatus visit={visit} />
             <Button href="/request?tab=history" variant="secondary">
               Back
             </Button>
@@ -129,7 +140,10 @@ export default async function StaffRequestDetailPage({
       <div className="mb-4 grid gap-3 sm:grid-cols-3">
         <Card tone="sky">
           <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--faint)]">When</div>
-          <div className="mt-1 text-[13px] font-medium">{fmtDateTime(visit.expectedArrival)}</div>
+          <div className="mt-1 text-[13px] font-medium">
+            {fmtDateTime(visit.expectedArrival)}
+            {visit.expectedDeparture ? ` – ${fmtTime(visit.expectedDeparture)}` : ""}
+          </div>
           <div className="text-[12px] text-[var(--muted)]">{visit.department.name}</div>
         </Card>
         <Card tone="sand">
@@ -219,8 +233,11 @@ export default async function StaffRequestDetailPage({
       ) : null}
 
       <Card className="mb-4">
-        <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--faint)]">Purpose</div>
-        <p className="mt-1 text-[14px]">{visit.purpose}</p>
+        <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--faint)]">Title of visit</div>
+        <p className="mt-1 text-[14px]">{visit.visitTitle || visit.purpose}</p>
+        {visit.purpose && visit.purpose !== visit.visitTitle ? (
+          <p className="mt-3 text-[13px] text-[var(--muted)]">{visit.purpose}</p>
+        ) : null}
       </Card>
 
       <Card className="mb-4">
@@ -237,13 +254,38 @@ export default async function StaffRequestDetailPage({
                 {mobile || guest.email ? (
                   <div className="text-[12px] text-[var(--muted)]">{[mobile, guest.email].filter(Boolean).join(" · ")}</div>
                 ) : null}
+                {link.gatePassRequired || (!visit.visitors.some((item) => item.gatePassRequired) && visit.gatePassRequired) ? (
+                  <div className="mt-1 text-[12px]">
+                    Gate pass · {link.gatePassStatus || visit.gatePassStatus || "Waiting"}
+                    {link.gatePassFile ? (
+                      <>
+                        {" · "}
+                        <a className="font-medium text-[var(--brand-ink)]" href={`/api/gate-passes/${visit.id}/${link.id}`}>
+                          Open file
+                        </a>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
+                {link.giftRequired || (!visit.visitors.some((item) => item.giftRequired) && visit.giftRequired) ? (
+                  <div className="text-[12px]">Gift · {link.giftType || visit.giftType || "Protocol gift"} · {link.giftStatus || visit.giftStatus || "Waiting"}</div>
+                ) : null}
+                {seeDocs && parseGuestDocs(link.attachmentsJson).length ? (
+                  <div className="mt-1 flex flex-wrap gap-2">
+                    {parseGuestDocs(link.attachmentsJson).map((doc) => (
+                      <a key={doc.type} className="text-[12px] font-medium text-[var(--brand-ink)]" href={guestDocHref(visit.id, doc.type, link.id)}>
+                        {doc.type === "PASSPORT" ? "Passport" : doc.type === "VISA" ? "Visa" : "ID"}
+                      </a>
+                    ))}
+                  </div>
+                ) : null}
               </li>
             );
           })}
         </ul>
       </Card>
 
-      {docs.length && !canEdit ? (
+      {seeDocs && docs.length && !canEdit ? (
         <Card className="mb-4">
           <h2 className="text-sm font-semibold">Documents</h2>
           <ul className="mt-3 space-y-2">

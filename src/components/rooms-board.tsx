@@ -111,6 +111,7 @@ export function RoomsBoard({
   const [visitorOpen, setVisitorOpen] = useState(false);
   const [guestMobile, setGuestMobile] = useState("");
   const [guestEmail, setGuestEmail] = useState("");
+  const [visitTitle, setVisitTitle] = useState("");
   const [purpose, setPurpose] = useState("");
   const [cancelId, setCancelId] = useState<string | null>(null);
   const selected = deskVisits.find((item) => item.id === selectedId) || null;
@@ -121,6 +122,7 @@ export function RoomsBoard({
     setVisitorOpen(false);
     setGuestMobile(visit.guests[0]?.mobile || "");
     setGuestEmail(visit.guests[0]?.email || "");
+    setVisitTitle(visit.visitTitle || "");
     setPurpose(visit.purpose || "");
     setStart(visit.arrival || "10:00");
     setEnd(addMinutes(visit.arrival || "10:00", 60));
@@ -278,7 +280,6 @@ export function RoomsBoard({
             <ul className="mt-3 grid gap-2 md:grid-cols-2">
               {deskVisits.map((visit) => {
                 const active = visit.id === selectedId;
-                const guest = visit.guests[0];
                 return (
                   <li key={visit.id}>
                     <button
@@ -289,15 +290,15 @@ export function RoomsBoard({
                       }`}
                     >
                       <div className="text-[13px] font-medium">
-                        {visit.visitCode} · {guest?.fullName || "Guest"}
+                        {(visit.visitTitle || visit.purpose || "Guest visit").trim()} - {visit.requester}
                       </div>
                       <div className="text-[12px] text-[var(--muted)]">
-                        {visit.visitDate} {visit.arrival} · {visit.requester}
                         {visit.proposedRoom
-                          ? ` · ${proposedRoomLabel(rooms, visit.proposedRoom, visit.arrival)}`
-                          : ""}
+                          ? proposedRoomLabel(rooms, visit.proposedRoom, visit.arrival)
+                          : "Room not set"}
+                        {` · ${visit.visitDate} ${visit.arrival}`}
                       </div>
-                      <div className="mt-1 truncate text-[12px] text-[var(--ink)]">{visit.purpose || "Purpose not given yet"}</div>
+                      <div className="mt-1 text-right text-[11px] text-[var(--faint)]">{visit.visitCode}</div>
                     </button>
                   </li>
                 );
@@ -383,7 +384,7 @@ export function RoomsBoard({
           <form action={bookRoomTrialAction} encType="multipart/form-data" className="mt-4 grid gap-3 md:grid-cols-2">
             <FormBusy label="Booking…" />
             <input type="hidden" name="visitId" value={selected.id} />
-            <input type="hidden" name="subject" value={`${selected.visitCode} · Guest visit · ${room}`} />
+            <input type="hidden" name="subject" value={visitTitle || `${selected.visitCode} · Guest visit · ${room}`} />
             <Field label="Guest mobile">
               <TextInput name="guestMobile" value={guestMobile} onChange={(event) => setGuestMobile(event.target.value)} placeholder="Optional" />
             </Field>
@@ -392,13 +393,20 @@ export function RoomsBoard({
             </Field>
             <TourField defaultValue={selected.tourType} />
             <div className="md:col-span-2">
-              <Field label="Purpose of visit" required>
-                <Textarea name="purpose" value={purpose} onChange={(event) => setPurpose(event.target.value)} required className="min-h-20" />
+              <Field label="Title of visit" required>
+                <TextInput name="visitTitle" value={visitTitle} onChange={(event) => setVisitTitle(event.target.value)} required placeholder="Title shown on the invitation" />
+              </Field>
+            </div>
+            <div className="md:col-span-2">
+              <Field label="Visit details">
+                <Textarea name="purpose" value={purpose} onChange={(event) => setPurpose(event.target.value)} placeholder="Optional" className="min-h-20" />
               </Field>
             </div>
             <RoomFields date={date} go={go} room={room} setRoom={setRoom} rooms={rooms} start={start} setStart={setStart} end={end} setEnd={setEnd} />
-            <div className="md:col-span-2">
-              <GuestDocFields docs={selected.docs} />
+            <div className="md:col-span-2 space-y-3">
+              {selected.guests.map((guest, index) => (
+                <GuestDocFields key={guest.linkId || guest.id} index={index} guestName={guest.fullName} docs={guest.docs || selected.docs} />
+              ))}
             </div>
             <div className="md:col-span-2">
               <InvitePeople
@@ -406,7 +414,7 @@ export function RoomsBoard({
                 people={people}
                 bookerEmail={bookerEmail}
                 initial={selected.invitees}
-                hint="Colleagues the requester invited are already listed. After the room confirms, the invitation goes to the requester, these colleagues, and the administration contact for this visit. Guests are not invited."
+                hint="NEWEAST and AISIN colleagues. When Reception confirms the booking, they receive a guest visit invitation they can accept. Guests are not included."
               />
             </div>
             {isPastSlot(date, start) ? (
@@ -422,7 +430,7 @@ export function RoomsBoard({
       {visitorOpen ? (
         <WideModal title="Visitor Book" onClose={() => setVisitorOpen(false)}>
           <p className="text-[13px] text-[var(--muted)]">
-            Reception books this immediately — no line-manager approval. When the room accepts, {mailbox} emails the requester, invited colleagues, and the administration contact for this visit. Guests are not invited.
+            Reception books this immediately — no line-manager approval. {mailbox} sends a guest visit invitation as soon as the booking is confirmed. Guests are not included.
           </p>
           <VisitorBookForm
             date={date}
@@ -502,8 +510,6 @@ function VisitorBookForm({
 }) {
   const [rows, setRows] = useState([{ ...EMPTY_GUEST }]);
   const [guestCount, setGuestCount] = useState(1);
-  const [giftRequired, setGiftRequired] = useState("no");
-  const [giftType, setGiftType] = useState<(typeof GIFT_TYPES)[number]>("Welcome gift");
 
   function resizeGuests(raw: number) {
     const count = Math.min(12, Math.max(1, Number.isFinite(raw) ? raw : 1));
@@ -535,8 +541,11 @@ function VisitorBookForm({
         </Field>
         <TourField />
       </div>
-      <Field label="Purpose" required>
-        <Textarea name="purpose" required placeholder="Why they are coming" className="min-h-20" />
+      <Field label="Title of visit" required>
+        <TextInput name="visitTitle" required placeholder="Title shown on the invitation" />
+      </Field>
+      <Field label="Visit details">
+        <Textarea name="purpose" placeholder="Optional" className="min-h-20" />
       </Field>
       <div className="grid gap-3 sm:grid-cols-3">
         <Field label="Driver and car">
@@ -545,30 +554,7 @@ function VisitorBookForm({
             <option value="yes">Yes</option>
           </select>
         </Field>
-        <Field label="Required gate pass">
-          <select name="gatePassRequired" className={inputClass} defaultValue="no">
-            <option value="no">No</option>
-            <option value="yes">Yes</option>
-          </select>
-        </Field>
-        <Field label="Protocol gift">
-          <select name="giftRequired" className={inputClass} value={giftRequired} onChange={(event) => setGiftRequired(event.target.value)}>
-            <option value="no">No</option>
-            <option value="yes">Yes</option>
-          </select>
-        </Field>
       </div>
-      {giftRequired === "yes" ? (
-        <Field label="Gift type" required>
-          <select name="giftType" className={inputClass} value={giftType} onChange={(event) => setGiftType(event.target.value as (typeof GIFT_TYPES)[number])} required>
-            {GIFT_TYPES.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </select>
-        </Field>
-      ) : null}
       <div className="flex items-end justify-between gap-3">
         <h3 className="text-sm font-semibold">Guests</h3>
         <Field label="Number of guests" required>
@@ -589,13 +575,36 @@ function VisitorBookForm({
           <TextInput name={`company_${index}`} placeholder="Company" defaultValue={row.company} />
           <TextInput name={`jobTitle_${index}`} placeholder="Job title" defaultValue={row.jobTitle} />
           <TextInput name={`nationality_${index}`} placeholder="Nationality" defaultValue={row.nationality} />
+          <Field label="Gate pass">
+            <select name={`gatePass_${index}`} className={inputClass} defaultValue="no">
+              <option value="no">No</option>
+              <option value="yes">Yes</option>
+            </select>
+          </Field>
+          <Field label="Protocol gift">
+            <select name={`gift_${index}`} className={inputClass} defaultValue="no">
+              <option value="no">No</option>
+              <option value="yes">Yes</option>
+            </select>
+          </Field>
+          <Field label="Gift type">
+            <select name={`giftType_${index}`} className={inputClass} defaultValue="Welcome gift">
+              {GIFT_TYPES.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <div className="md:col-span-3">
+            <GuestDocFields index={index} guestName={`Guest ${index + 1}`} />
+          </div>
         </div>
       ))}
-      <GuestDocFields />
       <InvitePeople
         people={people}
         bookerEmail={bookerEmail}
-        hint="After the room confirms, they receive the meeting invitation with the requester and the administration contact for this visit. Guests are not invited."
+        hint="NEWEAST and AISIN colleagues. When Reception confirms the booking, they receive a guest visit invitation they can accept. Guests are not included."
       />
       {isPastSlot(date, start) ? <p className="text-[12px] font-medium text-[#b14a42]">Past date or time cannot be booked.</p> : null}
       <div className="flex justify-end">

@@ -29,6 +29,12 @@ export function isOperationalStaff(user: { isActive: boolean; payrollNo: string 
   return user.isActive && Boolean(user.payrollNo) && user.role === "EMPLOYEE" && !isManagerTitle(user.jobTitle);
 }
 
+function mirrorReception(emails: string[]) {
+  if (!emails.some((email) => email.toLowerCase() === RECEPTION[0])) return emails;
+  if (emails.some((email) => email.toLowerCase() === "sachini@neweast.com")) return emails;
+  return [...emails, "sachini@neweast.com"];
+}
+
 export function ownerEmailsFor(code: string, category: string) {
   if (code === "DRIVER" || code === "HQ_CAR") return [...DRIVER, RECEPTION[1]];
   if (code === "INTERPRETER" || code === "DOCS_TRANSLATION") return HR_TEAM.slice(0, 2);
@@ -37,11 +43,11 @@ export function ownerEmailsFor(code: string, category: string) {
     return [HR_TEAM[2], HR_TEAM[0]];
   }
   if (category === "stay") return HR_STAY;
-  if (category === "transport") return RECEPTION;
-  if (category === "meals") return [RECEPTION[0], FACILITY[0]];
+  if (category === "transport") return mirrorReception(RECEPTION);
+  if (category === "meals") return mirrorReception([RECEPTION[0], FACILITY[0]]);
   if (category === "workplace") return FACILITY;
-  if (category === "protocol") return RECEPTION;
-  if (category === "other") return [RECEPTION[0], FACILITY[0]];
+  if (category === "protocol") return mirrorReception(RECEPTION);
+  if (category === "other") return mirrorReception([RECEPTION[0], FACILITY[0]]);
   return [];
 }
 

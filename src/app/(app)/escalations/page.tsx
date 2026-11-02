@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { decideBuildingTourAction } from "@/app/actions";
 import { FormBusy } from "@/components/form-busy";
-import { StatusPill, TypeTag } from "@/components/status";
+import { VisitStatus, TypeTag } from "@/components/status";
 import { Card, PageHeader, Textarea } from "@/components/ui";
 import { requireSession } from "@/lib/auth";
 import { GUEST_KIND_LABEL, TOUR_TYPE_LABEL, parseTourType, type GuestKind, type TourType } from "@/lib/constants";
@@ -63,17 +63,19 @@ export default async function EscalationsPage({
             return (
               <Card key={visit.id} padded={false}>
                 <div className="border-b border-[var(--line)] px-5 py-4">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <Link href={`/intake/${visit.id}`} className="text-[15px] font-semibold">
-                        {visit.visitCode}
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <Link href={`/intake/${visit.id}`} className="text-[15px] font-medium">
+                        {(visit.visitTitle || visit.purpose || "Guest visit").trim()} - {visit.createdBy.name}
                       </Link>
-                      <TypeTag type={kind}>{GUEST_KIND_LABEL[kind]}</TypeTag>
-                      <StatusPill status={visit.status} />
+                      <div className="mt-1 text-[13px] text-[var(--muted)]">{visit.meetingRoom || "Room not set"}</div>
                     </div>
-                    <span className="text-[12px] text-[var(--muted)]">{fmtDateTime(visit.expectedArrival)}</span>
+                    <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                      <TypeTag type={kind}>{GUEST_KIND_LABEL[kind]}</TypeTag>
+                      <VisitStatus visit={visit} />
+                    </div>
                   </div>
-                  <p className="mt-2 text-[13px] text-[var(--muted)]">{visit.purpose}</p>
+                  <div className="mt-3 text-right text-[11px] text-[var(--faint)]">{visit.visitCode}</div>
                 </div>
                 <div className="grid gap-4 px-5 py-4 sm:grid-cols-3">
                   <Fact label="Guest" value={guest?.fullName} extra={`${visit.visitorCount} people`} />
