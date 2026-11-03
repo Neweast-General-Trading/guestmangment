@@ -23,6 +23,7 @@ export default async function ServiceTasksPage() {
         visit: {
           include: {
             host: true,
+            createdBy: { select: { name: true } },
             visitors: { include: { visitor: true }, where: { isPrimary: true } },
           },
         },
@@ -51,6 +52,7 @@ export default async function ServiceTasksPage() {
       },
       include: {
         host: true,
+        createdBy: { select: { name: true } },
         department: true,
         visitors: { include: { visitor: true }, where: { isPrimary: true } },
       },

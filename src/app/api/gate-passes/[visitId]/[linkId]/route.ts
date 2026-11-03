@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { requireSession } from "@/lib/auth";
-import { readGatePassFile } from "@/lib/gate-pass-file";
+import { gatePassDisposition, readGatePassFile } from "@/lib/gate-pass-file";
 import { canManageIntake, canSeePasses } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
-export async function GET(_request: Request, context: { params: Promise<{ visitId: string; linkId: string }> }) {
+export async function GET(request: Request, context: { params: Promise<{ visitId: string; linkId: string }> }) {
   const session = await requireSession();
   if (!session) return new NextResponse("Sign in required.", { status: 401 });
   const { visitId, linkId } = await context.params;
@@ -20,7 +20,7 @@ export async function GET(_request: Request, context: { params: Promise<{ visitI
   return new NextResponse(new Uint8Array(file.bytes), {
     headers: {
       "Content-Type": file.type,
-      "Content-Disposition": `inline; filename="${file.name}"`,
+      "Content-Disposition": gatePassDisposition(file.name, new URL(request.url).searchParams.get("download") === "1"),
       "Cache-Control": "private, no-store",
     },
   });

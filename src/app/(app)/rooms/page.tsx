@@ -28,7 +28,9 @@ export default async function RoomsPage({
   const manage = canManageIntake(session.role) || roomBooker;
   if (!manage && !isRoomsViewer(session.email)) redirect(homeFor(session.role));
   const query = await searchParams;
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(query.date || "") ? (query.date as string) : dubaiToday();
+  const today = dubaiToday();
+  const requested = /^\d{4}-\d{2}-\d{2}$/.test(query.date || "") ? (query.date as string) : today;
+  const date = requested < today ? today : requested;
 
   let rooms: Awaited<ReturnType<typeof roomsDaySchedule>> = [];
   let events: Awaited<ReturnType<typeof roomBoardEvents>> = [];
@@ -60,7 +62,7 @@ export default async function RoomsPage({
         title={roomBooker && !canManageIntake(session.role) ? "Room booking" : "Meeting rooms"}
         description={
           manage
-            ? "Room availability on the left. Visitor Book is an immediate reception booking. Employee requests sit underneath. Meetings stay in the side list, newest first."
+            ? "Room availability first. Meetings sit underneath, in tabs: Ready, Meeting room confirmed, Pending, and Cancelled."
             : "Room availability and the meetings booked in each hall."
         }
       />

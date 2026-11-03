@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { decideEscalationAction } from "@/app/actions";
 import { ArrangementDesk } from "@/components/arrangement-desk";
+import { CancelVisit } from "@/components/cancel-visit";
 import { FormBusy } from "@/components/form-busy";
 import { IntakeForm } from "@/components/intake-form";
 import { VisitStatus, TypeTag } from "@/components/status";
@@ -10,13 +11,14 @@ import { arrangementHint } from "@/lib/arrangement-types";
 import { requireSession } from "@/lib/auth";
 import { GUEST_KIND_LABEL, type GuestKind } from "@/lib/constants";
 import { meetingRoomOptions } from "@/lib/graph";
-import { fmtDateTime } from "@/lib/format";
+import { fmtDateTime, namedMeetingRoom } from "@/lib/format";
 import { GuestAttachmentList } from "@/components/guest-attachments";
-import { canApproveGatePass, canApproveGift, canCompleteDriver, canDecideEscalation, canManageIntake, isGatePassApprover } from "@/lib/permissions";
+import { canApproveGatePass, canApproveGift, canCompleteDriver, canDecideEscalation, canManageIntake, isGatePassApprover, mayCancelVisit } from "@/lib/permissions";
 import { guestDocHref, parseGuestDocs } from "@/lib/guest-doc-types";
 import { canEditStaffRequest } from "@/lib/staff-request";
 import { prisma } from "@/lib/prisma";
 import { lookups } from "@/lib/queries";
+import { preparationNote } from "@/lib/preparation";
 import { timeStamp, todayStamp } from "@/lib/visit-schedule";
 import { visitInclude } from "@/lib/visits";
 
@@ -37,6 +39,15 @@ export default async function IntakeDetailPage({
   const [{ hosts, departments }, rooms] = await Promise.all([lookups(), meetingRoomOptions()]);
   const kind = (visit.guestKind || "GUEST") as GuestKind;
   const locked = !["INTAKE", "ESCALATED"].includes(visit.status);
+  const storedRoom = namedMeetingRoom(visit.meetingRoom);
+  const hold = !storedRoom && visit.outlookEventId
+    ? await prisma.roomHold.findFirst({
+        where: { eventId: visit.outlookEventId, cancelledAt: null },
+        select: { roomName: true },
+      })
+    : null;
+  const roomName = storedRoom || namedMeetingRoom(hold?.roomName);
+  const roomConfirmed = Boolean(roomName && (visit.roomConfirmRepliedAt || visit.calendarInvitedAt));
   const canEdit = canManageIntake(session.role) && visit.status === "INTAKE";
   const canDecide = visit.status === "ESCALATED" && canDecideEscalation(session);
   const seeDocs = isGatePassApprover(session);
@@ -45,7 +56,7 @@ export default async function IntakeDetailPage({
     <div>
       <PageHeader
         title={`${(visit.visitTitle || visit.purpose || "Guest visit").trim()} - ${visit.createdBy.name}`}
-        description={`${visit.meetingRoom || "Room not set"} · ${visit.visitCode}`}
+        description={[`${roomName || "Room not set"} · ${visit.visitCode}`, preparationNote(visit)].filter(Boolean).join(" · ")}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <TypeTag type={kind}>{GUEST_KIND_LABEL[kind]}</TypeTag>
@@ -55,6 +66,7 @@ export default async function IntakeDetailPage({
                 Edit all details
               </Button>
             ) : null}
+            {mayCancelVisit(session, visit) ? <CancelVisit visitId={visit.id} returnTo={`/intake/${visit.id}`} /> : null}
             <Button href="/intake" variant="secondary">
               Back to inbox
             </Button>
@@ -99,7 +111,7 @@ export default async function IntakeDetailPage({
         </Card>
         <Card tone="sage">
           <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--faint)]">Preparation</div>
-          <div className="mt-1 text-[13px] font-medium">{visit.meetingRoom || "Meeting room not set"}</div>
+          <div className="mt-1 text-[13px] font-medium">{roomName || "Meeting room not set"}</div>
           <div className="text-[12px] text-[var(--muted)]">
             {visit.driverName
               ? `Driver ${visit.driverName}`
@@ -111,7 +123,11 @@ export default async function IntakeDetailPage({
                   ? visit.giftStatus === "DONE"
                     ? "Gift received"
                     : "Gift in progress"
-                  : "Ready for room confirm"}
+                  : roomConfirmed
+                    ? "Room confirmed"
+                    : roomName
+                      ? "Waiting for the room"
+                      : "Choose a meeting room"}
           </div>
         </Card>
       </div>
@@ -225,7 +241,7 @@ export default async function IntakeDetailPage({
             departmentId: visit.departmentId,
             hostId: visit.hostId,
             guestKind: kind,
-            meetingRoom: visit.meetingRoom || "",
+            meetingRoom: roomName,
             driverRequired: visit.driverRequired,
             driverName: visit.driverName || "",
             driverMobile: visit.driverMobile || "",
@@ -251,6 +267,7 @@ export default async function IntakeDetailPage({
             }),
             tourType: visit.tourType,
             locked: !canEdit,
+            confirmed: roomConfirmed,
             docs: seeDocs
               ? parseGuestDocs(visit.attachmentsJson).map((doc) => ({
                   type: doc.type,

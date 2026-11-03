@@ -4,6 +4,10 @@ import {
   attachGuestEvents,
   findRoomByName,
   isDummyMail,
+  isNoiseMail,
+  bookingSlotMatches,
+  bookingTimeMatches,
+  sameBookingWindow,
   isGuestBookableRoom,
   isOtherFloorRoom,
   isReleasedBooking,
@@ -12,6 +16,7 @@ import {
   sameRoom,
   roomDayScheduleEnd,
   roomDaySlots,
+  attendeesForRoomUpdate,
   bookerCalendarBody,
   roomEventBody,
   withRequiredAttendee,
@@ -150,6 +155,62 @@ assert.equal(split.rooms[0]?.fromName, "MB_FF_Meeting Room_1");
 assert.equal(isDummyMail("Accepted: Confirm-check hold"), true);
 assert.equal(isDummyMail("Accepted: Guest visit room hold"), true);
 assert.equal(isDummyMail("Accepted: Guest visit · FF1"), false);
+assert.equal(isNoiseMail("Undeliverable: Visit ready at the desk", "MAILER-DAEMON@mx.example"), true);
+assert.equal(isNoiseMail("Automatic reply: Confirmed · Berlin", "sruthy@neweast.co"), true);
+assert.equal(isNoiseMail("Out of office: away", "person@neweast.com"), true);
+assert.equal(isNoiseMail("Guest visit request", "person@neweast.com"), false);
+assert.equal(
+  bookingTimeMatches(
+    { start: "2026-11-09T10:00:00.0000000", end: "2026-11-09T11:00:00.0000000" },
+    { start: "2026-11-09T10:00:00", end: "2026-11-09T11:00:00" },
+  ),
+  true,
+);
+assert.equal(
+  sameBookingWindow(
+    { start: new Date("2026-11-09T06:00:00.000Z"), end: new Date("2026-11-09T07:00:00.000Z") },
+    { start: new Date("2026-11-09T10:00:00+04:00"), end: new Date("2026-11-09T11:00:00+04:00") },
+  ),
+  true,
+);
+assert.equal(
+  sameBookingWindow(
+    { start: new Date("2026-11-09T06:00:00.000Z"), end: new Date("2026-11-09T07:00:00.000Z") },
+    { start: new Date("2026-11-09T11:00:00+04:00"), end: new Date("2026-11-09T12:00:00+04:00") },
+  ),
+  false,
+);
+assert.equal(
+  bookingSlotMatches(
+    { start: "2026-11-03T12:00:00.0000000", end: "2026-11-03T13:00:00.0000000", room: "Riyadh" },
+    { start: "2026-11-03T12:00:00", end: "2026-11-03T13:00:00", room: "riyadh" },
+  ),
+  true,
+);
+assert.equal(
+  bookingSlotMatches(
+    { start: "2026-11-03T12:00:00", end: "2026-11-03T13:00:00", room: "Riyadh" },
+    { start: "2026-11-03T15:00:00", end: "2026-11-03T16:00:00", room: "Riyadh" },
+  ),
+  false,
+);
+assert.equal(
+  attendeesForRoomUpdate(
+    [
+      { type: "resource", emailAddress: { address: "riyadh@neweast.co", name: "Riyadh" } },
+      { type: "required", emailAddress: { address: "catherine.fred@neweast.com", name: "Catherine" } },
+    ],
+    { email: "riyadh@neweast.co", name: "Riyadh" },
+  ).keep,
+  true,
+);
+assert.equal(
+  attendeesForRoomUpdate(
+    [{ type: "required", emailAddress: { address: "catherine.fred@neweast.com", name: "Catherine" } }],
+    { email: "dubai@neweast.co", name: "Dubai" },
+  ).attendees.length,
+  2,
+);
 assert.equal(isReleasedBooking({ subject: "Canceled: Guest visit · FF1" }), true);
 assert.equal(isReleasedBooking({ roomReply: "declined" }), true);
 assert.equal(isReleasedBooking({ roomReply: "accepted" }), false);

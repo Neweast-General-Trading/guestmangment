@@ -58,6 +58,16 @@ export function canManageIntake(role: Role) {
   return role === "SYSTEM_ADMIN" || role === "HR_ADMIN";
 }
 
+const CLOSED_VISIT = new Set(["COMPLETED", "CHECKED_OUT", "CANCELLED", "NO_SHOW", "REJECTED", "EXPIRED", "ACCESS_DENIED"]);
+
+export function mayCancelVisit(
+  actor: { id: string; role: Role },
+  visit: { status: string; createdById?: string | null; hostId?: string | null; checkInAt?: Date | string | null },
+) {
+  if (CLOSED_VISIT.has(visit.status) || visit.checkInAt) return false;
+  return canManageIntake(actor.role) || actor.id === visit.createdById || actor.id === visit.hostId;
+}
+
 export function isGiftApprover(user: { email: string }) {
   return user.email.trim().toLowerCase() === GIFT_OWNER_EMAIL;
 }

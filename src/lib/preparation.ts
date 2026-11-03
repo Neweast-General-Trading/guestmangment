@@ -19,6 +19,8 @@ export type PreparationVisit = {
   giftStatus?: string | null;
   tourType?: string | null;
   tourStatus?: string | null;
+  calendarInvitedAt?: Date | string | null;
+  roomConfirmRepliedAt?: Date | string | null;
   visitors?: PersonPrep[];
 };
 
@@ -49,7 +51,34 @@ export function preparationReady(visit: PreparationVisit) {
   return true;
 }
 
+export function preparationGaps(visit: PreparationVisit) {
+  if (preparationReady(visit)) return [];
+  const waiting: string[] = [];
+  if (!roomReady(visit)) waiting.push("Meeting room");
+  if (parseTourType(visit.tourType) === "BUILDING" && visit.tourStatus !== "APPROVED") waiting.push("Building tour");
+  if (visit.driverRequired && visit.driverStatus !== "DONE") waiting.push("Driver");
+  if (!listReady(visit.visitors, (person) => person.gatePassRequired, (person) => person.gatePassStatus, visit.gatePassRequired, visit.gatePassStatus)) {
+    waiting.push("Gate pass");
+  }
+  if (!listReady(visit.visitors, (person) => person.giftRequired, (person) => person.giftStatus, visit.giftRequired, visit.giftStatus)) {
+    waiting.push("Gift");
+  }
+  return waiting;
+}
+
+export function preparationWaiting(visit: PreparationVisit) {
+  if (visit.status !== "INTAKE") return [];
+  return preparationGaps(visit);
+}
+
+export function preparationNote(visit: PreparationVisit) {
+  const waiting = preparationWaiting(visit);
+  return waiting.length ? `Waiting on ${waiting.join(", ")}` : "";
+}
+
 export function preparationLabel(visit: PreparationVisit) {
-  if (visit.status !== "INTAKE") return undefined;
-  return preparationReady(visit) ? "Ready" : "Preparing";
+  if (visit.status !== "INTAKE" && visit.status !== "EXPECTED") return undefined;
+  if (preparationReady(visit)) return "Ready";
+  if (visit.roomConfirmRepliedAt || visit.calendarInvitedAt) return "Meeting room confirmed";
+  return "Preparing";
 }

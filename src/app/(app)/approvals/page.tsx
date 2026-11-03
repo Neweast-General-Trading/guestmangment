@@ -11,7 +11,15 @@ export default async function ApprovalsPage() {
   const pending = await prisma.approval.findMany({
     where: { status: "PENDING" },
     include: {
-      visit: { include: { host: true, department: true, visitors: { include: { visitor: true } }, approvals: { include: { assignee: { include: { department: true } } } } } },
+      visit: {
+        include: {
+          host: true,
+          createdBy: { select: { name: true } },
+          department: true,
+          visitors: { include: { visitor: true } },
+          approvals: { include: { assignee: { include: { department: true } } } },
+        },
+      },
       assignee: { include: { department: true } },
     },
     orderBy: { stepOrder: "asc" },

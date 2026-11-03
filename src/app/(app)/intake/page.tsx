@@ -3,19 +3,23 @@ import { Inbox, MailOpen, ShieldAlert } from "lucide-react";
 import { importEmailAction, syncInboxAction } from "@/app/actions";
 import { CopyButton } from "@/components/copy-button";
 import { InboxAutoSync } from "@/components/inbox-auto-sync";
+import { CancelVisit } from "@/components/cancel-visit";
+import { InboxMailCard } from "@/components/inbox-mail-card";
 import { VisitStatus, TypeTag } from "@/components/status";
 import { Button, Card, PageHeader, TextInput, Textarea } from "@/components/ui";
 import { requireSession } from "@/lib/auth";
 import { guestRequestTemplate } from "@/lib/email-template";
-import { GUEST_KIND_LABEL, type GuestKind } from "@/lib/constants";
+import { GUEST_KIND_LABEL, TERMINAL_STATUSES, type GuestKind } from "@/lib/constants";
 import { fmtDateTime } from "@/lib/format";
 import { peekInbox } from "@/lib/inbox-sync";
 import { isDummyMail, roomMailStatus, roomMailTitle, visitCodeFromSubject, type InboxHead } from "@/lib/graph";
-import { preparationLabel } from "@/lib/preparation";
-import { canManageIntake } from "@/lib/permissions";
+import { preparationLabel, preparationNote } from "@/lib/preparation";
+import { canManageIntake, mayCancelVisit, type SessionUser } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
-import { visitInclude } from "@/lib/visits";
+import { visitInclude, type FullVisit } from "@/lib/visits";
 import { redirect } from "next/navigation";
+
+const HIDDEN_CODES = ["GV-2026-000010", "GV-2026-000015"];
 
 const KIND_TONE: Record<string, string> = {
   VIP: "VIP",
@@ -27,19 +31,19 @@ const KIND_TONE: Record<string, string> = {
 export default async function IntakePage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; tab?: string }>;
 }) {
   const session = await requireSession();
   if (!session) return null;
   if (!canManageIntake(session.role)) redirect("/dashboard");
-  const { error } = await searchParams;
+  const { error, tab: tabQuery } = await searchParams;
+  const tab = tabQuery === "history" ? "history" : "current";
   const inbox = await peekInbox().catch(() => ({ requests: [] as InboxHead[], rooms: [] as InboxHead[] }));
   const [queued, ingested, repliedRows] = await Promise.all([
     prisma.visit.findMany({
-      where: { source: { in: ["EMAIL", "STAFF"] }, status: { in: ["INTAKE", "ESCALATED", "EXPECTED"] } },
+      where: { source: { in: ["EMAIL", "STAFF"] }, visitCode: { notIn: HIDDEN_CODES } },
       include: visitInclude,
-      orderBy: { createdAt: "desc" },
-      take: 80,
+      orderBy: { expectedArrival: "desc" },
     }),
     prisma.visit.findMany({
       where: { emailMessageId: { in: inbox.requests.map((item) => item.internetMessageId) } },
@@ -51,16 +55,21 @@ export default async function IntakePage({
     }),
   ]);
   const visits = queued.filter((item) => !isDummyMail(item.emailSubject || "", item.emailFrom || ""));
+  const now = Date.now();
+  const closed = new Set<string>(TERMINAL_STATUSES);
+  const upcoming = visits.filter((item) => item.expectedArrival.getTime() >= now && !closed.has(item.status));
+  const past = visits.filter((item) => item.expectedArrival.getTime() < now || closed.has(item.status));
   const taken = new Set(ingested.map((item) => item.emailMessageId).filter(Boolean));
   const repliedCodes = new Set(repliedRows.map((item) => item.visitCode));
-  const otherRequests = inbox.requests.filter((item) => !taken.has(item.internetMessageId));
-  const requestRows = [
-    ...visits.map((visit) => ({ key: visit.id, at: visit.createdAt.getTime(), visit })),
-    ...otherRequests.map((mail) => ({ key: mail.id, at: Date.parse(mail.receivedAt) || 0, mail })),
-  ].sort((a, b) => b.at - a.at);
+  const otherRequests = inbox.requests
+    .filter((item) => !taken.has(item.internetMessageId))
+    .sort((a, b) => (Date.parse(b.receivedAt) || 0) - (Date.parse(a.receivedAt) || 0));
   const counts = {
-    intake: visits.filter((item) => preparationLabel(item) === "Preparing").length,
-    escalated: visits.filter((item) => item.tourType === "BUILDING" && item.tourStatus === "PENDING").length,
+    intake: upcoming.filter((item) => {
+      const label = preparationLabel(item);
+      return label === "Preparing" || label === "Meeting room confirmed";
+    }).length,
+    escalated: upcoming.filter((item) => item.tourType === "BUILDING" && item.tourStatus === "PENDING").length,
     rooms: inbox.rooms.length,
   };
   const template = guestRequestTemplate();
@@ -69,7 +78,7 @@ export default async function IntakePage({
     <div>
       <PageHeader
         title="Visit requests"
-        description="Staff and email requests. Confirm the room, then the guard receives the visit."
+        description="Current shows meetings still ahead. History shows meetings that have passed or were cancelled."
         actions={
           <div className="flex flex-wrap gap-2">
             <a
@@ -101,63 +110,65 @@ export default async function IntakePage({
 
       <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.6fr)_minmax(280px,0.9fr)]">
         <section className="min-w-0 rounded-2xl border border-[var(--line)] bg-white p-4">
-          <SectionTitle
-            title="Visit requests"
-            count={requestRows.length}
-            hint="Newest first · staff requests and guest@neweast.co"
-          />
-          <div className="mt-3 max-h-[calc(100vh-16rem)] space-y-3 overflow-y-auto overscroll-contain pr-1">
-            {requestRows.length === 0 ? (
+          <div className="flex gap-1 overflow-x-auto rounded-xl border border-[var(--line)] bg-[#faf7f7] p-1">
+            {(
+              [
+                { id: "current", label: "Current", count: upcoming.length + otherRequests.length },
+                { id: "history", label: "History", count: past.length },
+              ] as const
+            ).map((item) => {
+              const active = tab === item.id;
+              return (
+                <Link
+                  key={item.id}
+                  href={item.id === "current" ? "/intake" : "/intake?tab=history"}
+                  className={`inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-lg px-3 text-[13px] whitespace-nowrap ${
+                    active ? "bg-[var(--brand-soft)] font-medium text-[var(--brand-ink)]" : "text-[var(--muted)] hover:bg-[#faf4f4]"
+                  }`}
+                >
+                  {item.label}
+                  <span className={`inline-flex min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] ${active ? "bg-white" : "bg-[#f4eeee]"}`}>
+                    {item.count}
+                  </span>
+                </Link>
+              );
+            })}
+          </div>
+          <p className="mt-3 text-[12px] text-[var(--muted)]">
+            {tab === "history" ? "Meetings that have passed or were cancelled. Newest first." : "From now on. Newest appointment first. New mail stays at the top."}
+          </p>
+          <div className="mt-3 space-y-3">
+            {tab === "history" ? (
+              past.length === 0 ? (
+                <Card>
+                  <p className="text-sm font-medium">No past or cancelled meetings.</p>
+                </Card>
+              ) : (
+                past.map((visit) => <VisitRequestCard key={visit.id} visit={visit} session={session} returnTo="/intake?tab=history" />)
+              )
+            ) : upcoming.length + otherRequests.length === 0 ? (
               <Card>
-                <p className="text-sm font-medium">No visit request emails waiting.</p>
+                <p className="text-sm font-medium">No upcoming meetings.</p>
                 <p className="mt-1 text-[13px] text-[var(--muted)]">
                   Fill the Excel template and send it as an attachment to guest@neweast.co. Click Sync inbox to create the request. You can also paste the text block on the right.
                 </p>
               </Card>
             ) : (
-              requestRows.map((row) => {
-                if ("mail" in row) return <MailCard key={row.key} item={row.mail} kind="request" />;
-                const visit = row.visit;
-                const guest = visit.visitors[0]?.visitor;
-                const kind = (visit.guestKind || "GUEST") as GuestKind;
-                return (
-                  <Link
-                    key={row.key}
-                    href={`/intake/${visit.id}`}
-                    className="block rounded-xl border border-[var(--line)] bg-[#fcfafa] p-4 hover:border-[var(--line-strong)] hover:bg-white"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-[15px] font-medium leading-snug text-[var(--ink)]">
-                          {(visit.visitTitle || visit.purpose || "Guest visit").trim()} - {visit.createdBy?.name || "NEWEAST"}
-                        </div>
-                        <div className="mt-1 text-[13px] text-[var(--muted)]">
-                          {visit.meetingRoom || "Room not set"}
-                          <span className="text-[var(--faint)]"> · {fmtDateTime(visit.expectedArrival)}</span>
-                        </div>
-                      </div>
-                      <div className="flex shrink-0 flex-wrap justify-end gap-1">
-                        <TypeTag type={KIND_TONE[kind]}>{GUEST_KIND_LABEL[kind]}</TypeTag>
-                        <VisitStatus visit={visit} />
-                      </div>
-                    </div>
-                    <div className="mt-3 flex items-end justify-between gap-3 border-t border-[var(--line)] pt-2">
-                      <div className="min-w-0 text-[12px] text-[var(--muted)]">
-                        <span className="text-[var(--ink)]">{guest?.fullName || "Guest not named"}</span>
-                        {guest?.company ? ` · ${guest.company}` : ""}
-                        {` · ${visit.visitorCount} ${visit.visitorCount === 1 ? "guest" : "guests"}`}
-                        {visit.driverRequired ? " · Driver" : ""}
-                        {visit.giftRequired ? " · Gift" : ""}
-                        {visit.gatePassRequired ? " · Gate pass" : ""}
-                      </div>
-                      <div className="shrink-0 text-right text-[11px] text-[var(--faint)]">{visit.visitCode}</div>
-                    </div>
-                    {visit.roomConfirmRepliedAt ? (
-                      <div className="mt-2 text-[12px] font-medium text-[#2f7d6d]">Notes · Reply done</div>
-                    ) : null}
-                  </Link>
-                );
-              })
+              <>
+                {otherRequests.map((item) => (
+                  <InboxMailCard
+                    key={item.id}
+                    id={item.id}
+                    subject={item.subject}
+                    from={item.from}
+                    fromName={item.fromName}
+                    receivedAt={item.receivedAt ? fmtDateTime(item.receivedAt) : ""}
+                  />
+                ))}
+                {upcoming.map((visit) => (
+                  <VisitRequestCard key={visit.id} visit={visit} session={session} returnTo="/intake" />
+                ))}
+              </>
             )}
           </div>
         </section>
@@ -240,6 +251,57 @@ function Stat({
         {label}
       </div>
       <div className="mt-1 text-2xl font-semibold tracking-tight">{value}</div>
+    </div>
+  );
+}
+
+function VisitRequestCard({
+  visit,
+  session,
+  returnTo,
+}: {
+  visit: FullVisit;
+  session: SessionUser;
+  returnTo: string;
+}) {
+  const guest = visit.visitors[0]?.visitor;
+  const kind = (visit.guestKind || "GUEST") as GuestKind;
+  return (
+    <div className="rounded-xl border border-[var(--line)] bg-[#fcfafa] p-4 hover:border-[var(--line-strong)] hover:bg-white">
+      <Link href={`/intake/${visit.id}`} className="block">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-[15px] font-medium leading-snug text-[var(--ink)]">
+              {(visit.visitTitle || visit.purpose || "Guest visit").trim()} - {visit.createdBy?.name || "NEWEAST"}
+            </div>
+            <div className="mt-1 text-[13px] text-[var(--muted)]">
+              {[visit.meetingRoom || "Room not set", preparationNote(visit)].filter(Boolean).join(" · ")}
+              <span className="text-[var(--faint)]"> · {fmtDateTime(visit.expectedArrival)}</span>
+            </div>
+          </div>
+          <div className="flex shrink-0 flex-wrap justify-end gap-1">
+            <TypeTag type={KIND_TONE[kind]}>{GUEST_KIND_LABEL[kind]}</TypeTag>
+            <VisitStatus visit={visit} />
+          </div>
+        </div>
+        <div className="mt-3 flex items-end justify-between gap-3 border-t border-[var(--line)] pt-2">
+          <div className="min-w-0 text-[12px] text-[var(--muted)]">
+            <span className="text-[var(--ink)]">{guest?.fullName || "Guest not named"}</span>
+            {guest?.company ? ` · ${guest.company}` : ""}
+            {` · ${visit.visitorCount} ${visit.visitorCount === 1 ? "guest" : "guests"}`}
+            {visit.driverRequired ? " · Driver" : ""}
+            {visit.giftRequired ? " · Gift" : ""}
+            {visit.gatePassRequired ? " · Gate pass" : ""}
+          </div>
+          <div className="shrink-0 text-right text-[11px] text-[var(--faint)]">{visit.visitCode}</div>
+        </div>
+        {visit.roomConfirmRepliedAt ? <div className="mt-2 text-[12px] font-medium text-[#2f7d6d]">Notes · Reply done</div> : null}
+      </Link>
+      {mayCancelVisit(session, visit) ? (
+        <div className="mt-3 border-t border-[var(--line)] pt-3">
+          <CancelVisit visitId={visit.id} returnTo={returnTo} />
+        </div>
+      ) : null}
     </div>
   );
 }

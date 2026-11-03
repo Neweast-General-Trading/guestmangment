@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { bookReceptionVisitAction, bookRoomTrialAction, cancelRoomTrialAction } from "@/app/actions";
+import { CancelReasonPopup } from "@/components/cancel-visit";
 import { FormBusy } from "@/components/form-busy";
 import { InvitePeople } from "@/components/invite-people";
 import { SearchSelect } from "@/components/search-select";
@@ -10,7 +12,8 @@ import { TourField } from "@/components/tour-field";
 import { GuestDocFields } from "@/components/guest-doc-fields";
 import { Button, Card, Field, TextInput, Textarea, inputClass } from "@/components/ui";
 import { GIFT_TYPES } from "@/lib/arrangement-types";
-import { isDummyMail, roomKey, sameRoom, type GuestDayEvent, type RoomDayRow, type RoomReply, type RoomSlot, type SlotBooking } from "@/lib/graph";
+import { visitHeadline } from "@/lib/format";
+import { isDummyMail, roomKey, sameRoom, type GuestDayEvent, type RoomDayRow, type RoomSlot, type SlotBooking } from "@/lib/graph";
 import type { RoomDeskVisit } from "@/lib/room-booking";
 
 const FREE = "bg-[#8ec9a4] hover:bg-[#7bbc93]";
@@ -63,13 +66,35 @@ function oursOnSlot(row: RoomDayRow, slot: RoomSlot, events: GuestDayEvent[]) {
   } satisfies SlotBooking;
 }
 
-function replyLabel(reply?: RoomReply, cancelled?: boolean) {
-  if (cancelled && reply !== "declined") return "Cancelled — slot is free to book";
-  if (reply === "accepted") return "Meeting room confirmed";
-  if (reply === "declined") return "Meeting room declined — slot is free to book";
-  if (reply === "pending") return "Waiting for meeting room";
-  return "";
+type MeetingGroup = "ready" | "confirmation" | "pending" | "cancelled";
+
+function meetingGroup(event: GuestDayEvent): MeetingGroup {
+  if (event.stage) return event.stage;
+  if (event.cancelled || event.roomReply === "declined") return "cancelled";
+  if (event.roomReply === "accepted") return "confirmation";
+  return "pending";
 }
+
+function MeetingSummary({ event }: { event: GuestDayEvent }) {
+  return (
+    <>
+      <div className="text-[13px] font-medium">{event.subject}</div>
+      {event.waiting ? <div className="text-[12px] text-[var(--ink)]">{event.waiting}</div> : null}
+      <div className="text-[12px] text-[var(--muted)]">
+        {event.start}–{event.end} · {event.room}
+      </div>
+      {event.description ? <div className="mt-1 text-[12px] text-[var(--ink)]">{event.description}</div> : null}
+      {event.reference ? <div className="mt-1 text-right text-[11px] text-[var(--faint)]">{event.reference}</div> : null}
+    </>
+  );
+}
+
+const MEETING_GROUPS: { id: MeetingGroup; title: string; hint: string }[] = [
+  { id: "ready", title: "Ready", hint: "The room accepted, every requirement is done, and the invitation emails were sent." },
+  { id: "confirmation", title: "Meeting room confirmed", hint: "The room accepted. Requirements are still being prepared." },
+  { id: "pending", title: "Pending", hint: "Waiting for the meeting room to accept." },
+  { id: "cancelled", title: "Cancelled", hint: "Cancelled or declined. The slot is free." },
+];
 
 export function RoomsBoard({
   date: initialDate,
@@ -102,10 +127,6 @@ export function RoomsBoard({
   const [room, setRoom] = useState(initialRooms[0]?.name || "");
   const [start, setStart] = useState("10:00");
   const [end, setEnd] = useState("11:00");
-  const shownEvents = events
-    .filter((event) => !isDummyMail(event.subject))
-    .slice()
-    .sort((a, b) => b.start.localeCompare(a.start) || b.end.localeCompare(a.end));
   const [tip, setTip] = useState<{ x: number; y: number; booking: SlotBooking; room: string } | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [visitorOpen, setVisitorOpen] = useState(false);
@@ -113,7 +134,14 @@ export function RoomsBoard({
   const [guestEmail, setGuestEmail] = useState("");
   const [visitTitle, setVisitTitle] = useState("");
   const [purpose, setPurpose] = useState("");
-  const [cancelId, setCancelId] = useState<string | null>(null);
+  const [meetingTab, setMeetingTab] = useState<MeetingGroup>("ready");
+  const meetingsByGroup = MEETING_GROUPS.map((group) => ({
+    ...group,
+    events: events
+      .filter((event) => !isDummyMail(event.subject) && !isPastSlot(date, event.end || event.start) && meetingGroup(event) === group.id)
+      .sort((a, b) => a.start.localeCompare(b.start) || a.end.localeCompare(b.end)),
+  }));
+  const activeMeetings = meetingsByGroup.find((group) => group.id === meetingTab) || meetingsByGroup[0];
   const selected = deskVisits.find((item) => item.id === selectedId) || null;
   const hours = rooms[0]?.slots || [];
 
@@ -172,7 +200,7 @@ export function RoomsBoard({
   }
 
   return (
-    <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px] lg:items-start">
+    <div className="space-y-5">
       <div className="min-w-0 space-y-5">
         <Card padded={false} className="overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-3">
@@ -181,7 +209,7 @@ export function RoomsBoard({
               <p className="text-[12px] text-[var(--muted)]">Ground-floor city rooms only. Green is free.</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <button type="button" onClick={() => go(shiftDate(date, -1))} className={navBtn}>
+              <button type="button" onClick={() => go(shiftDate(date, -1))} disabled={date <= dubaiToday()} className={`${navBtn} disabled:cursor-default disabled:opacity-40`}>
                 Previous
               </button>
               <input
@@ -269,6 +297,66 @@ export function RoomsBoard({
           </div>
         </Card>
 
+        <Card padded={false}>
+          <div className="border-b border-[var(--line)] px-4 py-3">
+            <h2 className="text-sm font-semibold">Meetings</h2>
+            <p className="mt-1 text-[12px] text-[var(--muted)]">Current and upcoming only.</p>
+          </div>
+          <div className="flex gap-1 overflow-x-auto border-b border-[var(--line)] p-2">
+            {meetingsByGroup.map((group) => {
+              const active = group.id === activeMeetings.id;
+              return (
+                <button
+                  key={group.id}
+                  type="button"
+                  onClick={() => setMeetingTab(group.id)}
+                  className={`inline-flex h-10 flex-1 cursor-pointer items-center justify-center gap-2 rounded-lg px-3 text-[13px] whitespace-nowrap ${
+                    active ? "bg-[var(--brand-soft)] font-medium text-[var(--brand-ink)]" : "text-[var(--muted)] hover:bg-[#faf4f4]"
+                  }`}
+                >
+                  {group.title}
+                  <span className={`inline-flex min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] ${active ? "bg-white" : "bg-[#f4eeee]"}`}>
+                    {group.events.length}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="p-3">
+            <p className="text-[12px] text-[var(--muted)]">{activeMeetings.hint}</p>
+            {activeMeetings.events.length === 0 ? (
+              <p className="mt-3 rounded-xl border border-dashed border-[var(--line)] px-3 py-4 text-center text-[13px] text-[var(--muted)]">None coming up.</p>
+            ) : (
+              <ul className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                {activeMeetings.events.map((event) => {
+                  return (
+                    <li key={event.id} className={`rounded-xl border border-[var(--line)] bg-[#fcfafa] px-3 py-2 ${event.href ? "hover:border-[var(--line-strong)] hover:bg-white" : ""}`}>
+                      {event.href ? (
+                        <Link href={event.href} className="block">
+                          <MeetingSummary event={event} />
+                        </Link>
+                      ) : (
+                        <MeetingSummary event={event} />
+                      )}
+                      {activeMeetings.id === "cancelled" || !manage ? null : (
+                        <div className="mt-2">
+                          <CancelReasonPopup
+                            action={cancelRoomTrialAction}
+                            fields={[
+                              { name: "eventId", value: event.id },
+                              { name: "date", value: date },
+                            ]}
+                          />
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        </Card>
+
         {manage ? <Card>
           <h2 className="text-sm font-semibold">Visit requests</h2>
           <p className="mt-1 text-[12px] text-[var(--muted)]">
@@ -308,56 +396,11 @@ export function RoomsBoard({
         </Card> : null}
       </div>
 
-      <Card padded={false} className="flex h-[calc(100vh-8rem)] min-h-[28rem] flex-col overflow-hidden lg:sticky lg:top-4">
-        <div className="border-b border-[var(--line)] px-4 py-3">
-          <h2 className="text-sm font-semibold">Meetings</h2>
-          <p className="mt-1 text-[12px] text-[var(--muted)]">
-            {manage ? "Newest first for this day. Cancel needs a written reason." : "Newest first for this day."}
-          </p>
-        </div>
-        <ul className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain p-3">
-          {shownEvents.length === 0 ? (
-            <li className="px-1 py-6 text-center text-[13px] text-[var(--muted)]">No meetings booked from here on this day.</li>
-          ) : (
-            shownEvents.map((event) => (
-              <li key={event.id} className="rounded-xl border border-[var(--line)] bg-[#fcfafa] px-3 py-2">
-                <div className="text-[13px] font-medium">{event.subject}</div>
-                <div className="text-[12px] text-[var(--muted)]">
-                  {event.start}–{event.end} · {event.room}
-                </div>
-                {event.description ? <div className="mt-1 text-[12px] text-[var(--ink)]">{event.description}</div> : null}
-                {replyLabel(event.roomReply, event.cancelled) ? (
-                  <div className={`mt-1 text-[12px] font-medium ${event.roomReply === "accepted" && !event.cancelled ? "text-[#2f7d6d]" : event.roomReply === "declined" || event.cancelled ? "text-[#5f6672]" : "text-[#9a6b20]"}`}>
-                    {replyLabel(event.roomReply, event.cancelled)}
-                  </div>
-                ) : null}
-                {event.cancelled || !manage ? null : cancelId === event.id ? (
-                  <form action={cancelRoomTrialAction} className="mt-2 space-y-2">
-                    <input type="hidden" name="eventId" value={event.id} />
-                    <input type="hidden" name="date" value={date} />
-                    <Textarea name="reason" required placeholder="Cancellation reason" className="min-h-16" />
-                    <div className="flex gap-2">
-                      <Button type="submit" variant="danger">
-                        Submit cancellation
-                      </Button>
-                      <button type="button" className="text-[12px] text-[var(--muted)]" onClick={() => setCancelId(null)}>
-                        Back
-                      </button>
-                    </div>
-                  </form>
-                ) : (
-                  <button type="button" className="mt-2 cursor-pointer text-[12px] font-medium text-[#b14a42]" onClick={() => setCancelId(event.id)}>
-                    Cancel
-                  </button>
-                )}
-              </li>
-            ))
-          )}
-        </ul>
-      </Card>
-
       {selected ? (
-        <WideModal title={`${selected.visitCode} · complete request`} onClose={() => setSelectedId(null)}>
+        <WideModal
+          title={visitHeadline({ visitTitle: selected.visitTitle, purpose: selected.purpose, name: selected.requester })}
+          onClose={() => setSelectedId(null)}
+        >
           <p className="text-[13px] text-[var(--muted)]">
             From {selected.requester} · {selected.department} · {selected.guestKind}. Proposed room:{" "}
             {selected.proposedRoom ? proposedRoomLabel(rooms, selected.proposedRoom, selected.arrival) : "N/A"}.
@@ -384,7 +427,7 @@ export function RoomsBoard({
           <form action={bookRoomTrialAction} encType="multipart/form-data" className="mt-4 grid gap-3 md:grid-cols-2">
             <FormBusy label="Booking…" />
             <input type="hidden" name="visitId" value={selected.id} />
-            <input type="hidden" name="subject" value={visitTitle || `${selected.visitCode} · Guest visit · ${room}`} />
+            <input type="hidden" name="subject" value={visitHeadline({ visitTitle, purpose, name: selected.requester })} />
             <Field label="Guest mobile">
               <TextInput name="guestMobile" value={guestMobile} onChange={(event) => setGuestMobile(event.target.value)} placeholder="Optional" />
             </Field>
@@ -414,6 +457,7 @@ export function RoomsBoard({
                 people={people}
                 bookerEmail={bookerEmail}
                 initial={selected.invitees}
+                cancelVisitId={selected.id}
                 hint="NEWEAST and AISIN colleagues. When Reception confirms the booking, they receive a guest visit invitation they can accept. Guests are not included."
               />
             </div>

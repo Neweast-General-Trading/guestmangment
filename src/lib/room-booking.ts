@@ -1,5 +1,6 @@
 import { addTimeline, writeAudit } from "./audit";
-import { fmtDate, fmtTime } from "./format";
+import { fmtDate, fmtTime, visitHeadline } from "./format";
+import { preparationGaps, preparationReady, type PreparationVisit } from "./preparation";
 import { notify } from "./notify";
 
 function isPendingContact(value?: string | null) {
@@ -12,6 +13,8 @@ import {
   deleteUserCalendarEvent,
   guestEventRoomReply,
   graphConfigured,
+  outlookTimeUnchanged,
+  sameBookingWindow,
   guestMailbox,
   listGuestDayEvents,
   inviteBookerToGuestEvent,
@@ -41,8 +44,14 @@ export async function syncOutlookRoom(visitId: string, roomName?: string | null)
     where: { id: visitId },
     include: {
       department: true,
+      createdBy: { select: { name: true } },
       visitors: { include: { visitor: true }, take: 1 },
     },
+  });
+  const subject = visitHeadline({
+    visitTitle: visit.visitTitle,
+    purpose: visit.purpose,
+    name: visit.createdBy.name,
   });
   const name = (roomName ?? visit.meetingRoom ?? "").trim();
   const empty = !name || name === "Yes";
@@ -61,17 +70,23 @@ export async function syncOutlookRoom(visitId: string, roomName?: string | null)
     visit.expectedDeparture && visit.expectedDeparture > start
       ? visit.expectedDeparture
       : new Date(start.getTime() + 60 * 60 * 1000);
-  const guest = visit.visitors[0]?.visitor;
   const previous = visit.outlookEventId
     ? await prisma.roomHold.findFirst({ where: { eventId: visit.outlookEventId, cancelledAt: null } })
     : null;
+  if (visit.outlookEventId) {
+    const unchanged = previous
+      ? sameBookingWindow({ start: previous.startAt, end: previous.endAt }, { start, end })
+      : await outlookTimeUnchanged(visit.outlookEventId, start, end, previous ? holdOrganizer(previous) : undefined);
+    if (unchanged) return { booked: true, roomName: name };
+  }
   try {
     const booked = await bookGuestRoom({
       eventId: visit.outlookEventId,
+      organizerEmail: previous ? holdOrganizer(previous) : undefined,
       roomName: name,
       start,
       end,
-      subject: `${visit.visitCode} · ${guest?.fullName || "Guest visit"}`,
+      subject,
       body: [
         visit.purpose,
         `Department: ${visit.department.name}`,
@@ -101,7 +116,7 @@ export async function syncOutlookRoom(visitId: string, roomName?: string | null)
         room: booked.roomName,
         start,
         end,
-        subject: `${visit.visitCode} · ${guest?.fullName || "Guest visit"}`,
+        subject,
         reason: visit.purpose,
       });
       await prisma.roomHold.update({
@@ -112,7 +127,7 @@ export async function syncOutlookRoom(visitId: string, roomName?: string | null)
           startAt: start,
           endAt: end,
           description: visit.purpose,
-          subject: `${visit.visitCode} · ${guest?.fullName || "Guest visit"}`,
+          subject,
         },
       });
     }
@@ -237,6 +252,11 @@ export function parseRoomInvitees(values: string[], bookerEmail = "") {
     }
   }
   return items;
+}
+
+export function omitInvitee(raw: string | null | undefined, email: string) {
+  const key = email.trim().toLowerCase();
+  return parseStoredInvitees(raw).filter((item) => item.email !== key);
 }
 
 export function parseStoredInvitees(raw?: string | null): RoomInvitee[] {
@@ -371,12 +391,95 @@ export async function flushHoldsFromEvents(events: GuestDayEvent[]) {
   }
 }
 
+async function displaySubject(subject: string, eventId?: string | null, visitId?: string | null) {
+  const code = visitCodeFromSubject(subject);
+  const visit = visitId
+    ? await prisma.visit.findUnique({
+        where: { id: visitId },
+        select: { visitTitle: true, purpose: true, visitCode: true, createdBy: { select: { name: true } } },
+      })
+    : eventId || code
+      ? await prisma.visit.findFirst({
+          where: {
+            OR: [...(eventId ? [{ outlookEventId: eventId }] : []), ...(code ? [{ visitCode: code }] : [])],
+          },
+          select: { visitTitle: true, purpose: true, visitCode: true, createdBy: { select: { name: true } } },
+        })
+      : null;
+  if (!visit) return { subject, reference: code || undefined };
+  return {
+    subject: visitHeadline({ visitTitle: visit.visitTitle, purpose: visit.purpose, name: visit.createdBy.name }),
+    reference: visit.visitCode,
+  };
+}
+
+function meetingStage(
+  event: { cancelled?: boolean; roomReply: GuestDayEvent["roomReply"] },
+  visit?: (PreparationVisit & { calendarInvitedAt?: Date | null }) | null,
+): GuestDayEvent["stage"] {
+  if (event.cancelled || event.roomReply === "declined" || (visit && ["CANCELLED", "REJECTED"].includes(visit.status))) return "cancelled";
+  if (event.roomReply !== "accepted") return "pending";
+  if (visit && preparationReady(visit) && visit.calendarInvitedAt) return "ready";
+  return "confirmation";
+}
+
+async function labelGuestEvents(events: GuestDayEvent[]) {
+  const ids = [...new Set(events.map((event) => event.id).filter(Boolean))];
+  const codes = [...new Set(events.map((event) => visitCodeFromSubject(event.subject)).filter((code): code is string => Boolean(code)))];
+  if (!ids.length && !codes.length) return events.map((event) => ({ ...event, stage: meetingStage(event) }));
+  const visits = await prisma.visit.findMany({
+    where: {
+      OR: [...(ids.length ? [{ outlookEventId: { in: ids } }] : []), ...(codes.length ? [{ visitCode: { in: codes } }] : [])],
+    },
+    select: {
+      id: true,
+      source: true,
+      outlookEventId: true,
+      visitCode: true,
+      visitTitle: true,
+      purpose: true,
+      status: true,
+      calendarInvitedAt: true,
+      meetingRoom: true,
+      driverRequired: true,
+      driverStatus: true,
+      gatePassRequired: true,
+      gatePassStatus: true,
+      giftRequired: true,
+      giftStatus: true,
+      tourType: true,
+      tourStatus: true,
+      createdBy: { select: { name: true } },
+      visitors: { select: { gatePassRequired: true, gatePassStatus: true, giftRequired: true, giftStatus: true } },
+    },
+  });
+  const byId = new Map(visits.filter((visit) => visit.outlookEventId).map((visit) => [visit.outlookEventId as string, visit]));
+  const byCode = new Map(visits.map((visit) => [visit.visitCode, visit]));
+  return events.map((event) => {
+    const visit = byId.get(event.id) || byCode.get(visitCodeFromSubject(event.subject) || "");
+    if (!visit) return { ...event, stage: meetingStage(event) };
+    const stage = meetingStage(event, visit);
+    const gaps = preparationGaps(visit);
+    const onIntake = (visit.source === "EMAIL" || visit.source === "STAFF") && ["INTAKE", "ESCALATED"].includes(visit.status);
+    return {
+      ...event,
+      stage,
+      visitId: visit.id,
+      href: onIntake ? `/intake/${visit.id}` : `/visits/${visit.id}`,
+      subject: visitHeadline({ visitTitle: visit.visitTitle, purpose: visit.purpose, name: visit.createdBy.name }),
+      reference: visit.visitCode,
+      waiting: stage === "confirmation" && gaps.length ? `Waiting on ${gaps.join(", ")}` : undefined,
+    };
+  });
+}
+
 export async function roomBoardEvents(date: string) {
   void notifyOutsideRoomBookings().catch(() => undefined);
   const [listed, holds] = await Promise.all([listGuestDayEvents(date), listHoldEventsForDay(date)]);
   const merged = mergeRoomDayEvents(listed, holds);
   await flushHoldsFromEvents(merged).catch(() => undefined);
-  return attachRoomHoldNotes(merged, await roomHoldNotes(merged.map((event) => event.id)));
+  const noted = attachRoomHoldNotes(merged, await roomHoldNotes(merged.map((event) => event.id)));
+  return labelGuestEvents(noted);
 }
 
 export type RoomDeskVisit = {
@@ -496,15 +599,28 @@ export async function bookStaffRoomHold(
         visitCode: string;
         purpose: string;
         visitTitle: string;
+        outlookEventId: string | null;
+        outlookRoomEmail: string | null;
+        createdBy: { name: string };
         visitors: { visitorId: string; visitor: { id: string; mobile: string; email: string | null; fullName: string } }[];
       }
     | null = null;
+  let scheduleChanged = true;
   if (input.visitId) {
-    visit = await prisma.visit.findUnique({
+    const current = await prisma.visit.findUnique({
       where: { id: input.visitId },
-      include: { visitors: { include: { visitor: true }, orderBy: { isPrimary: "desc" } } },
+      include: {
+        createdBy: { select: { name: true } },
+        visitors: { include: { visitor: true }, orderBy: { isPrimary: "desc" } },
+      },
     });
-    if (!visit) throw new Error("Visit request was not found.");
+    if (!current) throw new Error("Visit request was not found.");
+    const oldEnd =
+      current.expectedDeparture && current.expectedDeparture > current.expectedArrival
+        ? current.expectedDeparture
+        : new Date(current.expectedArrival.getTime() + 60 * 60 * 1000);
+    scheduleChanged = !current.outlookEventId || !sameBookingWindow({ start: current.expectedArrival, end: oldEnd }, { start: input.start, end: input.end });
+    visit = current;
     const purpose = (input.purpose ?? visit.purpose ?? "").trim();
     const visitTitle = (input.visitTitle || visit.visitTitle || "").trim();
     if (!visitTitle) throw new Error("Title of visit is required.");
@@ -534,12 +650,11 @@ export async function bookStaffRoomHold(
         meetingRoom: input.roomName,
       },
     });
-    visit = { ...visit, purpose, visitTitle, visitCode: visit.visitCode };
+    visit = { ...current, purpose, visitTitle };
   }
-  const subject =
-    (visit?.visitTitle || "").trim() ||
-    input.subject.trim() ||
-    (visit ? `${visit.visitCode} · Guest visit · ${input.roomName}` : "Guest visit room hold");
+  const subject = visit
+    ? visitHeadline({ visitTitle: visit.visitTitle, purpose: visit.purpose, name: visit.createdBy.name })
+    : input.subject.trim() || "Guest visit room hold";
   const description = (input.description || "").trim().slice(0, 2000);
   const invitees = parseRoomInvitees(input.inviteEmails || [], actor.email);
   const named = await prisma.user.findMany({
@@ -548,8 +663,32 @@ export async function bookStaffRoomHold(
   });
   const byEmail = new Map(named.map((row) => [row.email.toLowerCase(), row.name]));
   const guests = invitees.map((item) => ({ ...item, name: byEmail.get(item.email) || item.name }));
-  const organizerEmail = actor.email;
+  const existingHold = visit?.outlookEventId
+    ? await prisma.roomHold.findFirst({ where: { eventId: visit.outlookEventId, cancelledAt: null } })
+    : null;
+  if (visit?.outlookEventId && !scheduleChanged) {
+    if (existingHold) {
+      await prisma.roomHold.update({
+        where: { id: existingHold.id },
+        data: { subject, description, invitees: JSON.stringify(guests) },
+      });
+    }
+    await writeAudit({
+      userId: actor.id,
+      action: "Room booking kept",
+      module: "Rooms",
+      visitId: visit.id,
+      newValue: { eventId: visit.outlookEventId, room: input.roomName, subject, visitCode: visit.visitCode },
+    });
+    return {
+      eventId: visit.outlookEventId,
+      roomEmail: visit.outlookRoomEmail || existingHold?.roomEmail || "",
+      roomName: input.roomName,
+    };
+  }
+  const organizerEmail = existingHold ? holdOrganizer(existingHold) : visit?.outlookEventId ? guestMailbox() : actor.email;
   const booked = await bookGuestRoom({
+    eventId: visit?.outlookEventId,
     organizerEmail,
     roomName: input.roomName,
     start: input.start,
@@ -558,24 +697,40 @@ export async function bookStaffRoomHold(
     body: staffRoomEventBody({ name: actor.name, email: actor.email, description }),
     attendees: [],
   });
-  await prisma.roomHold.create({
-    data: {
-      eventId: booked.eventId,
-      roomName: booked.roomName,
-      roomEmail: booked.roomEmail,
-      subject,
-      description,
-      startAt: input.start,
-      endAt: input.end,
-      bookedById: actor.id,
-      bookedByEmail: actor.email,
-      bookedByName: actor.name,
-      organizerEmail,
-      invitees: JSON.stringify(guests),
-      bookerEventId: booked.eventId,
-      bookerInvitedAt: new Date(),
-    },
-  });
+  if (existingHold) {
+    await prisma.roomHold.update({
+      where: { id: existingHold.id },
+      data: {
+        eventId: booked.eventId,
+        roomName: booked.roomName,
+        roomEmail: booked.roomEmail,
+        subject,
+        description,
+        startAt: input.start,
+        endAt: input.end,
+        invitees: JSON.stringify(guests),
+      },
+    });
+  } else {
+    await prisma.roomHold.create({
+      data: {
+        eventId: booked.eventId,
+        roomName: booked.roomName,
+        roomEmail: booked.roomEmail,
+        subject,
+        description,
+        startAt: input.start,
+        endAt: input.end,
+        bookedById: actor.id,
+        bookedByEmail: actor.email,
+        bookedByName: actor.name,
+        organizerEmail,
+        invitees: JSON.stringify(guests),
+        bookerEventId: booked.eventId,
+        bookerInvitedAt: new Date(),
+      },
+    });
+  }
   await writeAudit({
     userId: actor.id,
     action: "Room booked",
@@ -657,6 +812,7 @@ async function notifyBookingChange(input: {
   reason?: string;
 }) {
   const people = await bookingPeople(input.eventId, input.visitId);
+  const labeled = await displaySubject(input.subject, input.eventId, input.visitId);
   for (const person of people) {
     await sendBookingChangeEmail({
       to: person.email,
@@ -666,7 +822,7 @@ async function notifyBookingChange(input: {
       date: fmtDate(input.start),
       start: fmtTime(input.start),
       end: fmtTime(input.end),
-      subject: input.subject,
+      subject: labeled.subject,
       reason: input.reason,
     });
   }
@@ -879,7 +1035,7 @@ async function sendHoldReply(holdId: string, accepted: boolean) {
         date: fmtDate(hold.startAt),
         start: fmtTime(hold.startAt),
         end: fmtTime(hold.endAt),
-        subject: hold.subject,
+        subject: (await displaySubject(hold.subject, hold.eventId)).subject,
         description: hold.description,
         accepted,
       });

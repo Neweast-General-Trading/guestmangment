@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { ApprovalSummary } from "@/components/approval-track";
+import { CancelVisit } from "@/components/cancel-visit";
 import { PagedList } from "@/components/paged-list";
 import { VisitStatus, TypeTag } from "@/components/status";
 import { fmtDate, fmtTime, typeLabel } from "@/lib/format";
@@ -22,6 +23,7 @@ type VisitRow = {
   department: { name: string };
   visitors: { visitor: { fullName: string; company: string | null; mobile: string } }[];
   approvals: { requiredRole: string; status: string; stepName: string; assignee?: { name: string; department?: { name: string } | null } | null }[];
+  canCancel?: boolean;
 };
 
 function visitSearch(visit: VisitRow) {
@@ -84,6 +86,11 @@ export function VisitTable({
                     </td>
                     <td>
                       <VisitStatus visit={visit} />
+                      {visit.canCancel ? (
+                        <div className="mt-2">
+                          <CancelVisit visitId={visit.id} returnTo="/visits" />
+                        </div>
+                      ) : null}
                     </td>
                   </tr>
                 );

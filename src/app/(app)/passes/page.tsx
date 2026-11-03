@@ -4,6 +4,8 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { redirect } from "next/navigation";
 import { approveGatePassAction, completeGatePassAction } from "@/app/actions";
 import { ArrangementPill } from "@/components/arrangement-status";
+import { FileField } from "@/components/file-field";
+import { GatePassButton } from "@/components/gate-pass-button";
 import { FormBusy } from "@/components/form-busy";
 import { filesForGuests, type GuestFileLink } from "@/components/guest-attachments";
 import { VisitStatus, TypeTag } from "@/components/status";
@@ -11,20 +13,25 @@ import { Button, Card, PageHeader, Textarea } from "@/components/ui";
 import { requireSession } from "@/lib/auth";
 import { GUEST_KIND_LABEL, type GuestKind } from "@/lib/constants";
 import { listGatePassQueue } from "@/lib/arrangements";
+import { preparationNote } from "@/lib/preparation";
 import { fmtDateTime } from "@/lib/format";
 import { pageNumbers, paginate } from "@/lib/paging";
 import { canApproveGatePass, canManageIntake, canSeePasses } from "@/lib/permissions";
 
-const PAGE_SIZE = 4;
+const PAGE_SIZE = 12;
 
-function passHref(page: number) {
-  return page <= 1 ? "/passes" : `/passes?page=${page}`;
+function passHref(tab: "pending" | "ready", page: number) {
+  const params = new URLSearchParams();
+  if (tab === "ready") params.set("tab", "ready");
+  if (page > 1) params.set("page", String(page));
+  const query = params.toString();
+  return query ? `/passes?${query}` : "/passes";
 }
 
 export default async function GatePassRequestsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; approved?: string; received?: string; page?: string }>;
+  searchParams: Promise<{ error?: string; approved?: string; received?: string; page?: string; tab?: string }>;
 }) {
   const session = await requireSession();
   if (!session) return null;
@@ -35,14 +42,21 @@ export default async function GatePassRequestsPage({
   const canComplete = canManageIntake(session.role);
   const cards = visits.flatMap((visit) => {
     const marked = visit.visitors.filter((link) => link.gatePassRequired);
+    const sharedFile = marked.length ? null : visit.gatePassFile;
     const people = (marked.length ? marked : visit.visitors).map((link) => {
       const inherited = !marked.length && !link.gatePassStatus && (visit.gatePassStatus === "PREPARING" || visit.gatePassStatus === "DONE");
+      const ownFile = Boolean(link.gatePassFile);
       return {
         id: link.id,
         name: link.visitor.fullName,
         status: link.gatePassStatus || (inherited ? visit.gatePassStatus : "PENDING"),
         note: link.gatePassNote || (inherited ? visit.gatePassNote : ""),
-        file: link.gatePassFile,
+        file: link.gatePassFile || sharedFile,
+        fileHref: ownFile
+          ? `/api/gate-passes/${visit.id}/${link.id}`
+          : sharedFile
+            ? `/api/gate-passes/${visit.id}`
+            : "",
         attachmentsJson: link.attachmentsJson,
       };
     });
@@ -67,6 +81,7 @@ export default async function GatePassRequestsPage({
           status: visit.gatePassStatus || "PENDING",
           note: visit.gatePassNote,
           file: null,
+          fileHref: "",
           attachmentsJson: null,
         },
         files: files.loose,
@@ -74,8 +89,12 @@ export default async function GatePassRequestsPage({
     }
     return rows;
   });
+  const tab = query.tab === "ready" ? "ready" : "pending";
+  const pendingCards = cards.filter((row) => row.person.status !== "DONE" && !row.person.file);
+  const readyCards = cards.filter((row) => row.person.status === "DONE" || Boolean(row.person.file));
+  const shown = tab === "ready" ? readyCards : pendingCards;
   const requested = Number(query.page);
-  const view = paginate(cards, Number.isFinite(requested) ? requested : 1, PAGE_SIZE);
+  const view = paginate(shown, Number.isFinite(requested) ? requested : 1, PAGE_SIZE);
   const from = view.total ? (view.page - 1) * PAGE_SIZE + 1 : 0;
   const to = Math.min(view.page * PAGE_SIZE, view.total);
 
@@ -83,7 +102,7 @@ export default async function GatePassRequestsPage({
     <div className="mx-auto max-w-6xl">
       <PageHeader
         title="Gate passes"
-        description="Approve the gate pass first. The file upload appears after approval."
+        description="Pending still needs approval or a file. Ready means the gate pass is uploaded. Cancelled and past visits stay off this list."
       />
       {query.error ? (
         <p className="mb-4 rounded-md border border-[#ead8d8] bg-[var(--tint-peach)] px-3 py-2 text-[13px] text-[var(--brand-ink)]">
@@ -98,11 +117,15 @@ export default async function GatePassRequestsPage({
 
       {view.total === 0 ? (
         <Card>
-          <p className="text-sm font-medium">No open gate pass requests.</p>
-          <p className="mt-1 text-[13px] text-[var(--muted)]">New gate passes appear here as soon as a visit request reaches Administration.</p>
+          <PassTabs tab={tab} pending={pendingCards.length} ready={readyCards.length} />
+          <p className="mt-4 text-sm font-medium">{tab === "ready" ? "No ready gate passes." : "No gate passes waiting."}</p>
+          <p className="mt-1 text-[13px] text-[var(--muted)]">
+            {tab === "ready" ? "Uploaded gate passes for upcoming visits show here." : "New gate passes appear here until the file is uploaded."}
+          </p>
         </Card>
       ) : (
         <div className="space-y-4">
+          <PassTabs tab={tab} pending={pendingCards.length} ready={readyCards.length} />
           {view.rows.map((row) => {
             const visit = row.visit;
             const kind = (visit.guestKind || "GUEST") as GuestKind;
@@ -113,7 +136,9 @@ export default async function GatePassRequestsPage({
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="text-[15px] font-medium">{(visit.visitTitle || visit.purpose || "Guest visit").trim()} - {visit.createdBy.name}</div>
-                      <div className="mt-1 text-[13px] text-[var(--muted)]">{visit.meetingRoom || "Room not set"}</div>
+                      <div className="mt-1 text-[13px] text-[var(--muted)]">
+                        {[visit.meetingRoom || "Room not set", preparationNote(visit)].filter(Boolean).join(" · ")}
+                      </div>
                     </div>
                     <div className="flex shrink-0 flex-wrap justify-end gap-1">
                       <TypeTag>{GUEST_KIND_LABEL[kind]}</TypeTag>
@@ -144,11 +169,7 @@ export default async function GatePassRequestsPage({
                           : "Gate pass file is ready."}
                     </p>
                     {row.person.note ? <p className="mt-2 whitespace-pre-wrap text-[13px]">{row.person.note}</p> : null}
-                    {row.person.file ? (
-                      <a className="mt-2 inline-block text-[13px] font-medium text-[var(--brand-ink)]" href={row.person.id ? `/api/gate-passes/${visit.id}/${row.person.id}` : `/api/gate-passes/${visit.id}`}>
-                        Open gate pass
-                      </a>
-                    ) : null}
+                    {row.person.fileHref ? <GatePassButton href={row.person.fileHref} /> : null}
                     {canApprove && waiting && row.person.id ? (
                       <form action={approveGatePassAction} className="mt-3 space-y-2">
                         <FormBusy label="Approving gate pass…" />
@@ -165,7 +186,7 @@ export default async function GatePassRequestsPage({
                         <input type="hidden" name="visitId" value={visit.id} />
                         <input type="hidden" name="linkId" value={row.person.id} />
                         <input type="hidden" name="from" value="passes" />
-                        <input name="file" type="file" accept="application/pdf,image/png,image/jpeg,image/webp" required className="block w-full text-[13px]" />
+                        <FileField name="file" accept="application/pdf,image/png,image/jpeg,image/webp" required />
                         <Textarea name="note" placeholder="Note (optional)" className="min-h-16" />
                         <Button type="submit">Upload gate pass</Button>
                       </form>
@@ -182,7 +203,7 @@ export default async function GatePassRequestsPage({
                 {from}–{to} of {view.total}
               </p>
               <div className="flex items-center gap-1 rounded-full border border-[var(--line)] bg-white p-1">
-                <PageLink href={passHref(view.page - 1)} disabled={view.page <= 1} label="Previous page">
+                <PageLink href={passHref(tab, view.page - 1)} disabled={view.page <= 1} label="Previous page">
                   <ChevronLeft size={14} />
                 </PageLink>
                 {pageNumbers(view.page, view.pages).map((item, index) =>
@@ -191,12 +212,12 @@ export default async function GatePassRequestsPage({
                       …
                     </span>
                   ) : (
-                    <PageLink key={item} href={passHref(item)} current={item === view.page}>
+                    <PageLink key={item} href={passHref(tab, item)} current={item === view.page}>
                       {item}
                     </PageLink>
                   ),
                 )}
-                <PageLink href={passHref(view.page + 1)} disabled={view.page >= view.pages} label="Next page">
+                <PageLink href={passHref(tab, view.page + 1)} disabled={view.page >= view.pages} label="Next page">
                   <ChevronRight size={14} />
                 </PageLink>
               </div>
@@ -204,6 +225,34 @@ export default async function GatePassRequestsPage({
           ) : null}
         </div>
       )}
+    </div>
+  );
+}
+
+function PassTabs({ tab, pending, ready }: { tab: "pending" | "ready"; pending: number; ready: number }) {
+  const items = [
+    { id: "pending" as const, label: "Pending", count: pending },
+    { id: "ready" as const, label: "Ready", count: ready },
+  ];
+  return (
+    <div className="flex gap-1 overflow-x-auto rounded-xl border border-[var(--line)] bg-[#faf7f7] p-1">
+      {items.map((item) => {
+        const active = tab === item.id;
+        return (
+          <Link
+            key={item.id}
+            href={passHref(item.id, 1)}
+            className={`inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-lg px-3 text-[13px] whitespace-nowrap ${
+              active ? "bg-[var(--brand-soft)] font-medium text-[var(--brand-ink)]" : "text-[var(--muted)] hover:bg-[#faf4f4]"
+            }`}
+          >
+            {item.label}
+            <span className={`inline-flex min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] ${active ? "bg-white" : "bg-[#f4eeee]"}`}>
+              {item.count}
+            </span>
+          </Link>
+        );
+      })}
     </div>
   );
 }

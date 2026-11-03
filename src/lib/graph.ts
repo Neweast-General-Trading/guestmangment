@@ -202,6 +202,27 @@ export async function listHqRooms(): Promise<GraphRoom[]> {
     }));
 }
 
+export function bookingTimeMatches(
+  current: { start?: string; end?: string },
+  next: { start: string; end: string },
+) {
+  return (current.start || "").slice(0, 16) === next.start.slice(0, 16) && (current.end || "").slice(0, 16) === next.end.slice(0, 16);
+}
+
+export function bookingSlotMatches(
+  current: { start?: string; end?: string; room?: string },
+  next: { start: string; end: string; room: string },
+) {
+  return bookingTimeMatches(current, next) && (current.room || "").trim().toLowerCase() === next.room.trim().toLowerCase();
+}
+
+export function sameBookingWindow(current: { start: Date; end: Date }, next: { start: Date; end: Date }) {
+  return bookingTimeMatches(
+    { start: dubaiStamp(current.start), end: dubaiStamp(current.end) },
+    { start: dubaiStamp(next.start), end: dubaiStamp(next.end) },
+  );
+}
+
 function dubaiStamp(date: Date) {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Dubai",
@@ -277,6 +298,11 @@ export type GuestDayEvent = {
   roomReply: RoomReply;
   cancelled?: boolean;
   description?: string;
+  reference?: string;
+  stage?: "ready" | "confirmation" | "pending" | "cancelled";
+  visitId?: string;
+  href?: string;
+  waiting?: string;
 };
 
 export function roomKey(value: string) {
@@ -640,6 +666,15 @@ export function isDummyMail(subject: string, from = "") {
   );
 }
 
+export function isNoiseMail(subject: string, from = "") {
+  const title = subject.trim();
+  return (
+    /mailer-daemon|postmaster/i.test(from) ||
+    /^(undeliverable|delivery status notification|mail delivery failed|undelivered mail|returned mail)\b/i.test(title) ||
+    /^(automatic reply|out of office|autoreply)\b/i.test(title)
+  );
+}
+
 export function splitInboxHeads(heads: InboxHead[]) {
   const requests: InboxHead[] = [];
   const rooms: InboxHead[] = [];
@@ -729,22 +764,31 @@ export async function bookGuestRoom(input: {
   if (slot && !slot.available && !input.eventId) {
     throw new Error(`${room.name} is busy at that time.`);
   }
-  const day = dubaiStamp(input.start).slice(0, 10);
-  const startClock = dubaiStamp(input.start).slice(11, 16);
-  const endClock = dubaiStamp(input.end).slice(11, 16);
-  const leftovers = await listMailboxDayEvents(organizer, day);
-  for (const event of leftovers) {
-    if (event.id === input.eventId) continue;
-    if (!sameRoom(room, event)) continue;
-    if (!event.cancelled && event.roomReply !== "declined") continue;
-    if (event.start < endClock && event.end > startClock) await cancelGuestRoom(event.id, organizer);
+  if (!input.eventId) {
+    const day = dubaiStamp(input.start).slice(0, 10);
+    const startClock = dubaiStamp(input.start).slice(11, 16);
+    const endClock = dubaiStamp(input.end).slice(11, 16);
+    const leftovers = await listMailboxDayEvents(organizer, day);
+    for (const event of leftovers) {
+      if (event.cancelled) continue;
+      if (!sameRoom(room, event)) continue;
+      if (event.roomReply !== "declined") continue;
+      if (event.start < endClock && event.end > startClock) await cancelGuestRoom(event.id, organizer);
+    }
   }
   const payload = roomEventBody({ ...input, room });
   const box = encodeURIComponent(organizer);
   if (input.eventId) {
+    const current = await graphJson<{ attendees?: GraphAttendee[] }>(
+      `/users/${box}/events/${encodeURIComponent(input.eventId)}?$select=attendees`,
+    );
+    const next = attendeesForRoomUpdate(current.attendees || [], room, input.attendees || []);
+    const body: Record<string, unknown> = { ...payload };
+    if (next.keep) delete body.attendees;
+    else body.attendees = next.attendees;
     await graphJson(`/users/${box}/events/${encodeURIComponent(input.eventId)}`, {
       method: "PATCH",
-      body: JSON.stringify(payload),
+      body: JSON.stringify(body),
     });
     return { eventId: input.eventId, roomEmail: room.email, roomName: room.name };
   }
@@ -843,6 +887,19 @@ export async function listAllInboxHeads(): Promise<InboxHead[]> {
   return heads;
 }
 
+export async function readInboxText(messageId: string) {
+  const box = encodeURIComponent(mailbox());
+  const full = await graphJson<{
+    subject?: string;
+    body?: { contentType?: string; content?: string };
+    uniqueBody?: { contentType?: string; content?: string };
+  }>(`/users/${box}/messages/${messageId}?$select=subject,body,uniqueBody`);
+  return {
+    subject: full.subject || "",
+    text: messageText(full.uniqueBody) || messageText(full.body),
+  };
+}
+
 export async function hydrateInboxMessage(messageId: string): Promise<Pick<GraphMail, "text" | "files">> {
   const box = encodeURIComponent(mailbox());
   const full = await graphJson<{
@@ -854,6 +911,48 @@ export async function hydrateInboxMessage(messageId: string): Promise<Pick<Graph
     text: messageText(full.uniqueBody) || messageText(full.body),
     files: full.hasAttachments ? await messageFiles(messageId) : [],
   };
+}
+
+export async function outlookTimeUnchanged(eventId: string, start: Date, end: Date, organizerEmail?: string) {
+  const box = encodeURIComponent((organizerEmail || mailbox()).trim() || mailbox());
+  try {
+    const row = await graphJson<{ start?: { dateTime?: string }; end?: { dateTime?: string } }>(
+      `/users/${box}/events/${encodeURIComponent(eventId)}?$select=start,end`,
+      { headers: { Prefer: 'outlook.timezone="Asia/Dubai"' } },
+    );
+    return bookingTimeMatches(
+      { start: row.start?.dateTime, end: row.end?.dateTime },
+      { start: dubaiStamp(start), end: dubaiStamp(end) },
+    );
+  } catch {
+    return true;
+  }
+}
+
+export async function outlookRoomAlreadySet(eventId: string, roomName: string, start: Date, end: Date, organizerEmail?: string) {
+  const box = encodeURIComponent((organizerEmail || mailbox()).trim() || mailbox());
+  try {
+    const row = await graphJson<{
+      isCancelled?: boolean;
+      start?: { dateTime?: string };
+      end?: { dateTime?: string };
+      location?: { displayName?: string };
+      attendees?: { type?: string; emailAddress?: { name?: string } }[];
+    }>(`/users/${box}/events/${encodeURIComponent(eventId)}?$select=isCancelled,start,end,location,attendees`, {
+      headers: { Prefer: 'outlook.timezone="Asia/Dubai"' },
+    });
+    const resource = row.attendees?.find((item) => item.type === "resource");
+    return bookingSlotMatches(
+      {
+        start: row.start?.dateTime,
+        end: row.end?.dateTime,
+        room: resource?.emailAddress?.name || row.location?.displayName,
+      },
+      { start: dubaiStamp(start), end: dubaiStamp(end), room: roomName },
+    );
+  } catch {
+    return false;
+  }
 }
 
 export async function guestEventRoomReply(eventId: string, organizerEmail?: string): Promise<RoomReply> {
@@ -870,6 +969,40 @@ export type GraphAttendee = {
   emailAddress?: { address?: string; name?: string };
   status?: { response?: string };
 };
+
+export function attendeesForRoomUpdate(
+  current: GraphAttendee[],
+  room: { email: string; name: string },
+  extra: { email: string; name: string }[] = [],
+) {
+  const roomEmail = room.email.trim().toLowerCase();
+  const resource = current.find(
+    (item) =>
+      (item.type || "").toLowerCase() === "resource" &&
+      (item.emailAddress?.address || "").trim().toLowerCase() === roomEmail,
+  );
+  let people = current.filter((item) => {
+    const address = (item.emailAddress?.address || "").trim().toLowerCase();
+    return address.includes("@") && (item.type || "").toLowerCase() !== "resource" && address !== roomEmail;
+  });
+  for (const person of extra) people = withRequiredAttendee(people, person.email, person.name);
+  return {
+    keep: Boolean(resource) && extra.length === 0,
+    attendees: [
+      {
+        emailAddress: { address: room.email, name: room.name },
+        type: "resource" as const,
+      },
+      ...people.map((item) => ({
+        type: item.type || "required",
+        emailAddress: {
+          address: item.emailAddress?.address || "",
+          name: item.emailAddress?.name || item.emailAddress?.address || "",
+        },
+      })),
+    ],
+  };
+}
 
 export function withRequiredAttendee(attendees: GraphAttendee[], email: string, name: string) {
   const needle = email.trim().toLowerCase();
@@ -974,18 +1107,11 @@ export async function publishMeetingInvitation(
 }
 
 export async function inviteBookerToGuestEvent(eventId: string, email: string, name: string, organizerEmail?: string) {
-  const box = encodeURIComponent((organizerEmail || mailbox()).trim() || mailbox());
-  const event = await graphJson<{ iCalUId?: string; attendees?: GraphAttendee[] }>(
-    `/users/${box}/events/${encodeURIComponent(eventId)}?$select=id,iCalUId,attendees`,
-  );
-  const attendees = withRequiredAttendee(event.attendees || [], email, name);
-  if (attendees.length !== (event.attendees || []).length) {
-    await graphJson(`/users/${box}/events/${encodeURIComponent(eventId)}`, {
-      method: "PATCH",
-      body: JSON.stringify({ attendees }),
-    });
-  }
-  return { iCalUId: event.iCalUId || "" };
+  void eventId;
+  void email;
+  void name;
+  void organizerEmail;
+  return { iCalUId: "" };
 }
 
 export async function acceptBookerMeeting(userEmail: string, iCalUId: string) {

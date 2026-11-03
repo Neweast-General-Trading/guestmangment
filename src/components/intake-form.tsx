@@ -34,6 +34,7 @@ export type IntakeFormVisit = {
   visitors: (ParsedVisitor & { docs?: { type: GuestDocType; name: string; href: string }[] })[];
   tourType?: string | null;
   locked: boolean;
+  confirmed: boolean;
   docs?: { type: GuestDocType; name: string; href: string }[];
 };
 
@@ -87,7 +88,7 @@ export function IntakeForm({
             </select>
           </Field>
           <Field label="Meeting room" required>
-            <RoomSelect defaultValue={visit.meetingRoom} date={visitDate} time={arrival} disabled={visit.locked} required rooms={rooms} />
+            <RoomSelect defaultValue={visit.meetingRoom} keepBooked={visit.meetingRoom || undefined} date={visitDate} time={arrival} disabled={visit.locked} required rooms={rooms} />
           </Field>
           <TourField defaultValue={visit.tourType} />
         </div>
@@ -164,11 +165,13 @@ export function IntakeForm({
         <section className="rounded-2xl border border-[var(--line)] bg-white p-5">
           <h2 className="text-sm font-semibold">Actions</h2>
           <p className="mt-1 text-[12px] text-[var(--muted)]">
-            Confirm sets the room and driver. Submit sends the visit to the security desk. Building Tour waits for Salma Moufallah.
+            {visit.confirmed
+              ? "This meeting is already confirmed. Save keeps edits. Submit sends the visit to the security desk."
+              : "Confirm sets the room and driver. Submit sends the visit to the security desk. Building Tour waits for Salma Moufallah."}
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
             <IntakeAction label="Save" working="Saving…" variant="secondary" formAction={saveIntakeAction} />
-            <IntakeAction label="Confirm" working="Confirming…" formAction={confirmIntakeAction} />
+            {visit.confirmed ? null : <IntakeAction label="Confirm" working="Confirming…" formAction={confirmIntakeAction} />}
             <IntakeAction label="Submit to Security" working="Submitting…" formAction={submitIntakeAction} />
           </div>
         </section>

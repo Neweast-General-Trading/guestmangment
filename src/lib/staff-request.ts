@@ -8,7 +8,8 @@ import { makeQrToken, nextVisitCode } from "./ids";
 import { notify, notifyRoles } from "./notify";
 import { canUseRequestDesk } from "./access";
 import { canManageIntake, type SessionUser } from "./permissions";
-import { bookStaffRoomHold, parseRoomInvitees, syncOutlookRoom } from "./room-booking";
+import { bookStaffRoomHold, omitInvitee, parseRoomInvitees, parseStoredInvitees, syncOutlookRoom } from "./room-booking";
+import { sendCalendarCancelEmail } from "./mail";
 import { prisma } from "./prisma";
 import { assertFutureVisit, combineVisitDateTime } from "./visit-schedule";
 import { applyTourType, notifyNamed } from "./tours";
@@ -245,6 +246,101 @@ export function canEditStaffRequest(
 ) {
   if (!EDITABLE_REQUEST.has(visit.status)) return false;
   return actor.id === visit.createdById || canManageIntake(actor.role);
+}
+
+export async function cancelVisitInvitee(actor: SessionUser, visitId: string, email: string, reason: string) {
+  const note = reason.trim();
+  if (!note) throw new Error("Write a cancellation reason.");
+  const key = email.trim().toLowerCase();
+  if (!key.includes("@")) throw new Error("Choose a person to cancel.");
+  const visit = await prisma.visit.findUnique({
+    where: { id: visitId },
+    include: { createdBy: { select: { id: true, name: true } } },
+  });
+  if (!visit) throw new Error("Visit was not found.");
+  if (!canEditStaffRequest(actor, visit)) throw new Error("This request can no longer be edited.");
+  const person = parseStoredInvitees(visit.colleagueInvitees).find((item) => item.email === key);
+  if (!person) throw new Error("That person is not on the invitation.");
+  if (visit.calendarInvitedAt) {
+    const end =
+      visit.expectedDeparture && visit.expectedDeparture > visit.expectedArrival
+        ? visit.expectedDeparture
+        : new Date(visit.expectedArrival.getTime() + 60 * 60 * 1000);
+    const originator = visit.createdBy.name.trim() || "NEWEAST";
+    const title = visit.visitTitle.trim();
+    await sendCalendarCancelEmail({
+      to: person.email,
+      name: person.name,
+      fromName: originator,
+      subject: title ? `${title} - ${originator}` : originator,
+      reason: note,
+      start: visit.expectedArrival,
+      end,
+      location: visit.meetingRoom || "Meeting room",
+      uid: `${visit.id}@guest.neweast.co`,
+    });
+  }
+  await prisma.visit.update({
+    where: { id: visitId },
+    data: { colleagueInvitees: JSON.stringify(omitInvitee(visit.colleagueInvitees, key)) },
+  });
+  if (visit.outlookEventId) {
+    const hold = await prisma.roomHold.findFirst({ where: { eventId: visit.outlookEventId, cancelledAt: null } });
+    if (hold) {
+      await prisma.roomHold.update({
+        where: { id: hold.id },
+        data: {
+          invitees: JSON.stringify(omitInvitee(hold.invitees, key)),
+          pinnedAttendees: JSON.stringify(omitInvitee(hold.pinnedAttendees, key)),
+        },
+      });
+    }
+  }
+  await addTimeline({ visitId, event: "Invitee cancelled", note: `${person.name}: ${note}`, userId: actor.id });
+  await writeAudit({
+    userId: actor.id,
+    visitId,
+    action: "Invitee cancelled",
+    module: "Staff request",
+    newValue: { name: person.name, reason: note },
+  });
+}
+
+export async function cancelVisitGuest(actor: SessionUser, visitId: string, linkId: string, reason: string) {
+  const note = reason.trim();
+  if (!note) throw new Error("Write a cancellation reason.");
+  if (!linkId) throw new Error("Choose a guest to cancel.");
+  const visit = await prisma.visit.findUnique({
+    where: { id: visitId },
+    include: {
+      visitors: { include: { visitor: true }, orderBy: [{ sortOrder: "asc" }, { isPrimary: "desc" }] },
+    },
+  });
+  if (!visit) throw new Error("Visit was not found.");
+  if (!canEditStaffRequest(actor, visit)) throw new Error("This request can no longer be edited.");
+  if (visit.visitors.length <= 1) throw new Error("A visit needs at least one guest.");
+  const link = visit.visitors.find((item) => item.id === linkId);
+  if (!link) throw new Error("That guest is not on this visit.");
+  const remaining = visit.visitors.filter((item) => item.id !== linkId);
+  await prisma.visitVisitor.delete({ where: { id: link.id } });
+  for (const [index, item] of remaining.entries()) {
+    await prisma.visitVisitor.update({
+      where: { id: item.id },
+      data: { sortOrder: index, isPrimary: index === 0 },
+    });
+  }
+  await prisma.visit.update({
+    where: { id: visitId },
+    data: { visitorCount: remaining.length },
+  });
+  await addTimeline({ visitId, event: "Guest cancelled", note: `${link.visitor.fullName}: ${note}`, userId: actor.id });
+  await writeAudit({
+    userId: actor.id,
+    visitId,
+    action: "Guest cancelled",
+    module: "Staff request",
+    newValue: { name: link.visitor.fullName, reason: note },
+  });
 }
 
 export async function updateStaffRequest(actor: SessionUser, visitId: string, input: StaffRequestInput) {

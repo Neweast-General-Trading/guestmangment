@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { submitStaffRequestAction, updateStaffRequestAction } from "@/app/actions";
+import { useRef, useState, type FormEvent } from "react";
+import { createPortal } from "react-dom";
+import { cancelGuestAction, submitStaffRequestAction, updateStaffRequestAction } from "@/app/actions";
 import { FormBusy } from "@/components/form-busy";
 import { SearchSelect, type SearchOption } from "@/components/search-select";
 import { GIFT_TYPES } from "@/lib/arrangement-types";
@@ -13,6 +14,7 @@ import { Button, Field, TextInput, Textarea, inputClass } from "@/components/ui"
 import type { GuestDocType } from "@/lib/guest-doc-types";
 
 const EMPTY = {
+  linkId: "",
   fullName: "",
   mobile: "",
   email: "",
@@ -24,6 +26,16 @@ const EMPTY = {
   giftType: "Welcome gift",
   docs: [] as { type: GuestDocType; name: string; href: string }[],
 };
+
+function guestKey() {
+  return `new-${Math.random().toString(36).slice(2)}`;
+}
+
+function fieldValue(form: HTMLFormElement, name: string, fallback: string) {
+  const item = form.elements.namedItem(name);
+  if (!item || !("value" in item)) return fallback;
+  return String((item as { value: string }).value);
+}
 
 export type StaffRequestEdit = {
   id: string;
@@ -56,7 +68,12 @@ export function StaffRequestForm({
   bookerEmail: string;
   edit?: StaffRequestEdit | null;
 }) {
-  const [rows, setRows] = useState(edit?.guests.length ? edit.guests.map((row) => ({ ...EMPTY, ...row })) : [{ ...EMPTY }]);
+  const formRef = useRef<HTMLFormElement>(null);
+  const [rows, setRows] = useState(
+    edit?.guests.length
+      ? edit.guests.map((row) => ({ ...EMPTY, ...row, rowKey: row.linkId || guestKey() }))
+      : [{ ...EMPTY, rowKey: guestKey() }],
+  );
   const [guestCount, setGuestCount] = useState(edit?.guests.length || 1);
   const [visitDate, setVisitDate] = useState(edit?.visitDate || today);
   const [arrivalTime, setArrivalTime] = useState(edit?.arrivalTime || "10:00");
@@ -64,16 +81,41 @@ export function StaffRequestForm({
 
   function resizeGuests(raw: number) {
     const count = Math.min(12, Math.max(1, Number.isFinite(raw) ? raw : 1));
+    if (edit && count < rows.length) return;
     setGuestCount(count);
     setRows((current) => {
       const next = current.slice(0, count).map((row) => ({ ...row }));
-      while (next.length < count) next.push({ ...EMPTY });
+      while (next.length < count) next.push({ ...EMPTY, rowKey: guestKey() });
       return next;
     });
   }
 
+  function dropGuest(index: number) {
+    const form = formRef.current;
+    setRows((current) => {
+      const snap = current.map((row, rowIndex) =>
+        form
+          ? {
+              ...row,
+              fullName: fieldValue(form, `fullName_${rowIndex}`, row.fullName),
+              mobile: fieldValue(form, `mobile_${rowIndex}`, row.mobile),
+              email: fieldValue(form, `email_${rowIndex}`, row.email),
+              company: fieldValue(form, `company_${rowIndex}`, row.company),
+              jobTitle: fieldValue(form, `jobTitle_${rowIndex}`, row.jobTitle),
+              nationality: fieldValue(form, `nationality_${rowIndex}`, row.nationality),
+              gatePassRequired: fieldValue(form, `gatePass_${rowIndex}`, row.gatePassRequired ? "yes" : "no") === "yes",
+              giftRequired: fieldValue(form, `gift_${rowIndex}`, row.giftRequired ? "yes" : "no") === "yes",
+              giftType: fieldValue(form, `giftType_${rowIndex}`, row.giftType),
+            }
+          : row,
+      );
+      return snap.filter((_, rowIndex) => rowIndex !== index);
+    });
+    setGuestCount((count) => Math.max(1, count - 1));
+  }
+
   return (
-    <form action={edit ? updateStaffRequestAction : submitStaffRequestAction} encType="multipart/form-data" className="space-y-5">
+    <form ref={formRef} action={edit ? updateStaffRequestAction : submitStaffRequestAction} encType="multipart/form-data" className="space-y-5">
       <FormBusy label={edit ? "Saving changes…" : "Sending request…"} />
       {edit ? <input type="hidden" name="visitId" value={edit.id} /> : null}
       <input type="hidden" name="visitorRows" value={rows.length} />
@@ -142,9 +184,18 @@ export function StaffRequestForm({
           </Field>
         </div>
         {rows.map((row, index) => (
-          <div key={index} className="rounded-2xl border border-[var(--line)] bg-[#fcfafa] p-3">
-            <div className="mb-2 text-[12px] text-[var(--muted)]">
-              <span>Guest {index + 1} of {guestCount}</span>
+          <div key={row.rowKey} className="rounded-2xl border border-[var(--line)] bg-[#fcfafa] p-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="text-[12px] text-[var(--muted)]">Guest {index + 1} of {guestCount}</span>
+              {edit ? (
+                <GuestCancel
+                  visitId={edit.id}
+                  linkId={row.linkId}
+                  name={row.fullName || `Guest ${index + 1}`}
+                  alone={rows.length <= 1}
+                  onDone={() => dropGuest(index)}
+                />
+              ) : null}
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
               <Field label="Full name" required>
@@ -172,6 +223,7 @@ export function StaffRequestForm({
         people={people}
         bookerEmail={bookerEmail}
         initial={edit?.invitees || []}
+        cancelVisitId={edit?.id}
         hint="NEWEAST and AISIN colleagues to invite. When Reception confirms the booking, they receive a guest visit invitation they can accept. Guests are not included."
       />
 
@@ -226,5 +278,126 @@ function GuestChoices({
         </Field>
       ) : null}
     </div>
+  );
+}
+
+function GuestCancel({
+  visitId,
+  linkId,
+  name,
+  alone,
+  onDone,
+}: {
+  visitId: string;
+  linkId: string;
+  name: string;
+  alone: boolean;
+  onDone: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState(false);
+
+  function close() {
+    if (pending) return;
+    setReason("");
+    setError("");
+    setOpen(false);
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const note = reason.trim();
+    if (!note || pending || alone) return;
+    setPending(true);
+    setError("");
+    if (!linkId) {
+      setPending(false);
+      setOpen(false);
+      setReason("");
+      onDone();
+      return;
+    }
+    const formData = new FormData();
+    formData.set("visitId", visitId);
+    formData.set("linkId", linkId);
+    formData.set("reason", note);
+    const result = await cancelGuestAction(formData);
+    setPending(false);
+    if (!result || !("ok" in result)) {
+      setError(result && "error" in result && result.error ? result.error : "Could not cancel this guest.");
+      return;
+    }
+    setOpen(false);
+    setReason("");
+    onDone();
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        aria-label={`Cancel ${name}`}
+        onClick={() => setOpen(true)}
+        className="inline-flex h-8 items-center justify-center rounded-md border border-[#e4c4c2] bg-[#faf1f0] px-3 text-[12px] font-medium text-[#b14a42] hover:bg-[#f6e4e2]"
+      >
+        Cancel
+      </button>
+      {open
+        ? createPortal(
+            <div className="fixed inset-0 z-[80] flex items-center justify-center bg-[rgba(26,21,21,0.45)] p-4" onClick={close}>
+              <form
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="cancel-guest-title"
+                className="w-full max-w-md rounded-2xl border border-[var(--line)] bg-white p-5 shadow-lg"
+                onClick={(event) => event.stopPropagation()}
+                onSubmit={submit}
+              >
+                <h2 id="cancel-guest-title" className="text-base font-semibold">
+                  Cancellation reason
+                </h2>
+                <p className="mt-1 text-[13px] text-[var(--muted)]">
+                  {alone
+                    ? "A visit needs at least one guest. Cancel the visit itself if the whole meeting should stop."
+                    : `Cancel ${name} from this visit. The meeting stays for the other guests. Nothing is removed until you submit.`}
+                </p>
+                {alone ? null : (
+                  <Textarea
+                    required
+                    autoFocus
+                    value={reason}
+                    onChange={(event) => setReason(event.target.value)}
+                    placeholder="Cancellation reason"
+                    aria-label="Cancellation reason"
+                    className="mt-3 min-h-24"
+                  />
+                )}
+                {error ? <p className="mt-2 text-[13px] text-[#b14a42]">{error}</p> : null}
+                <div className="mt-4 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={close}
+                    className="inline-flex h-9 items-center justify-center rounded-md px-3 text-[13px] text-[var(--muted)] hover:text-[var(--ink)]"
+                  >
+                    Keep
+                  </button>
+                  {alone ? null : (
+                    <button
+                      type="submit"
+                      disabled={!reason.trim() || pending}
+                      className="inline-flex h-9 items-center justify-center rounded-md bg-[#b14a42] px-3 text-[13px] font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Submit
+                    </button>
+                  )}
+                </div>
+              </form>
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
   );
 }

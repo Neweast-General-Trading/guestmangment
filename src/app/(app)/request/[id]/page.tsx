@@ -1,5 +1,8 @@
 import { notFound, redirect } from "next/navigation";
 import { ArrangementPill } from "@/components/arrangement-status";
+import { CancelVisit } from "@/components/cancel-visit";
+import { GatePassButton } from "@/components/gate-pass-button";
+import { GatePassFiles } from "@/components/gate-pass-files";
 import { StaffRequestForm, type StaffRequestEdit } from "@/components/staff-request-form";
 import { VisitStatus, TypeTag } from "@/components/status";
 import { Button, Card, PageHeader } from "@/components/ui";
@@ -7,10 +10,11 @@ import { arrangementHint } from "@/lib/arrangement-types";
 import { requireSession } from "@/lib/auth";
 import { GUEST_KIND_LABEL, type GuestKind } from "@/lib/constants";
 import { fmtDateTime, fmtTime } from "@/lib/format";
-import { canSeeAllVisits, isGatePassApprover } from "@/lib/permissions";
+import { canManageIntake, canSeeAllVisits, canSeePasses, isGatePassApprover, mayCancelVisit } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { listRoomInvitePeople, parseStoredInvitees } from "@/lib/room-booking";
 import { guestDocHref, parseGuestDocs } from "@/lib/guest-doc-types";
+import { preparationNote } from "@/lib/preparation";
 import { canEditStaffRequest } from "@/lib/staff-request";
 import { timeStamp, todayStamp } from "@/lib/visit-schedule";
 
@@ -70,6 +74,7 @@ export default async function StaffRequestDetailPage({
           const markedPass = visit.visitors.some((item) => item.gatePassRequired);
           const markedGift = visit.visitors.some((item) => item.giftRequired);
           return {
+            linkId: link.id,
             fullName: link.visitor.fullName,
             mobile:
               link.visitor.mobile.startsWith("pending:") || link.visitor.mobile.startsWith("inbox:")
@@ -100,11 +105,12 @@ export default async function StaffRequestDetailPage({
     <div className="mx-auto max-w-3xl">
       <PageHeader
         title={`${(visit.visitTitle || visit.purpose || "Guest visit").trim()} - ${visit.createdBy.name}`}
-        description={`${visit.meetingRoom || "Room not set"} · ${visit.visitCode}`}
+        description={[`${visit.meetingRoom || "Room not set"} · ${visit.visitCode}`, preparationNote(visit)].filter(Boolean).join(" · ")}
         actions={
           <div className="flex items-center gap-2">
             <TypeTag>{GUEST_KIND_LABEL[kind]}</TypeTag>
             <VisitStatus visit={visit} />
+            {mayCancelVisit(session, visit) ? <CancelVisit visitId={visit.id} returnTo={`/request/${visit.id}`} /> : null}
             <Button href="/request?tab=history" variant="secondary">
               Back
             </Button>
@@ -118,6 +124,14 @@ export default async function StaffRequestDetailPage({
       ) : null}
       {saved ? (
         <p className="mb-4 rounded-md border border-[#d7e6da] bg-[var(--tint-sage)] px-3 py-2 text-[13px]">Changes saved.</p>
+      ) : null}
+
+      {visit.createdById === session.id || canSeePasses(session) || canManageIntake(session.role) ? (
+        <GatePassFiles
+          visitId={visit.id}
+          visitFile={visit.gatePassFile}
+          people={visit.visitors.map((link) => ({ id: link.id, name: link.visitor.fullName, file: link.gatePassFile }))}
+        />
       ) : null}
 
       {edit ? (
@@ -222,11 +236,7 @@ export default async function StaffRequestDetailPage({
                     : "Reception will review this gate pass."}
               </p>
               {visit.gatePassNote ? <p className="mt-2 whitespace-pre-wrap text-[13px]">{visit.gatePassNote}</p> : null}
-              {visit.gatePassStatus === "DONE" && visit.gatePassFile ? (
-                <a className="mt-2 inline-block text-[13px] font-medium text-[var(--brand-ink)]" href={`/api/gate-passes/${visit.id}`}>
-                  Open gate pass
-                </a>
-              ) : null}
+              {visit.gatePassStatus === "DONE" && visit.gatePassFile ? <GatePassButton href={`/api/gate-passes/${visit.id}`} /> : null}
             </Card>
           ) : null}
         </div>
@@ -257,13 +267,10 @@ export default async function StaffRequestDetailPage({
                 {link.gatePassRequired || (!visit.visitors.some((item) => item.gatePassRequired) && visit.gatePassRequired) ? (
                   <div className="mt-1 text-[12px]">
                     Gate pass · {link.gatePassStatus || visit.gatePassStatus || "Waiting"}
-                    {link.gatePassFile ? (
-                      <>
-                        {" · "}
-                        <a className="font-medium text-[var(--brand-ink)]" href={`/api/gate-passes/${visit.id}/${link.id}`}>
-                          Open file
-                        </a>
-                      </>
+                    {link.gatePassFile || visit.gatePassFile ? (
+                      <div>
+                        <GatePassButton href={link.gatePassFile ? `/api/gate-passes/${visit.id}/${link.id}` : `/api/gate-passes/${visit.id}`} />
+                      </div>
                     ) : null}
                   </div>
                 ) : null}

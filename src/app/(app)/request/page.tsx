@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { CancelVisit } from "@/components/cancel-visit";
 import { StaffRequestForm } from "@/components/staff-request-form";
 import { VisitStatus, TypeTag } from "@/components/status";
 import { Card, Empty, PageHeader } from "@/components/ui";
@@ -6,7 +7,9 @@ import { canUseRequestDesk, isRoomBooker } from "@/lib/access";
 import { requireSession } from "@/lib/auth";
 import { GUEST_KIND_LABEL, type GuestKind } from "@/lib/constants";
 import { fmtDateTime } from "@/lib/format";
+import { mayCancelVisit } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
+import { preparationNote } from "@/lib/preparation";
 import { listRoomInvitePeople } from "@/lib/room-booking";
 import { todayStamp } from "@/lib/visit-schedule";
 
@@ -136,14 +139,16 @@ export default async function StaffRequestPage({
               const guest = visit.visitors[0]?.visitor.fullName;
               const kind = (visit.guestKind || "GUEST") as GuestKind;
               return (
-                <Link key={visit.id} href={`/request/${visit.id}`} className="block">
-                  <Card>
+                <Card key={visit.id}>
+                  <Link href={`/request/${visit.id}`} className="block">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="text-[15px] font-medium leading-snug">
                           {(visit.visitTitle || visit.purpose || "Guest visit").trim()} - {visit.createdBy.name}
                         </div>
-                        <div className="mt-1 text-[13px] text-[var(--muted)]">{visit.meetingRoom || "Room not set"}</div>
+                        <div className="mt-1 text-[13px] text-[var(--muted)]">
+                          {[visit.meetingRoom || "Room not set", preparationNote(visit)].filter(Boolean).join(" · ")}
+                        </div>
                       </div>
                       <div className="flex shrink-0 flex-wrap justify-end gap-1">
                         <TypeTag>{GUEST_KIND_LABEL[kind]}</TypeTag>
@@ -159,8 +164,13 @@ export default async function StaffRequestPage({
                       </p>
                       <div className="shrink-0 text-[11px] text-[var(--faint)]">{visit.visitCode}</div>
                     </div>
-                  </Card>
-                </Link>
+                  </Link>
+                  {mayCancelVisit(session, visit) ? (
+                    <div className="mt-3 border-t border-[var(--line)] pt-3">
+                      <CancelVisit visitId={visit.id} returnTo="/request?tab=history" />
+                    </div>
+                  ) : null}
+                </Card>
               );
             })}
           </div>

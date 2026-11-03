@@ -4,6 +4,7 @@ import {
   graphConfigured,
   hydrateInboxMessage,
   isDummyMail,
+  isNoiseMail,
   isRoomReplyMail,
   listAllInboxHeads,
   splitInboxHeads,
@@ -153,7 +154,7 @@ async function syncViaImap(actor: SessionUser): Promise<InboxSyncResult> {
 export async function peekInbox() {
   if (!graphConfigured()) return { requests: [] as InboxHead[], rooms: [] as InboxHead[] };
   const split = splitInboxHeads(await listAllInboxHeads());
-  const live = (item: InboxHead) => !isDummyMail(item.subject, item.from);
+  const live = (item: InboxHead) => !isDummyMail(item.subject, item.from) && !isNoiseMail(item.subject, item.from);
   return {
     requests: split.requests.filter(live).sort((a, b) => (b.receivedAt || "").localeCompare(a.receivedAt || "")),
     rooms: split.rooms.filter(live).sort((a, b) => (b.receivedAt || "").localeCompare(a.receivedAt || "")),

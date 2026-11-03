@@ -54,6 +54,7 @@ export function RoomSelect({
     <select name={name} value={value} onChange={(event) => setValue(event.target.value)} className={inputClass} disabled={disabled} required={required}>
       <option value="">{loading && !rooms.length ? "Loading rooms…" : "Select a room"}</option>
       {allowNone ? <option value="N/A">N/A</option> : null}
+      {value && !rooms.some((room) => room.name === value) ? <option value={value}>{value}</option> : null}
       {rooms.map((room) => {
         const open = room.available || room.name === keepBooked;
         return (

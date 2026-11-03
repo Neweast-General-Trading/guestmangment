@@ -3,6 +3,7 @@ import { Button, PageHeader } from "@/components/ui";
 import { VisitFilters } from "@/components/filters";
 import { VisitTable } from "@/components/visit-table";
 import { requireSession } from "@/lib/auth";
+import { mayCancelVisit } from "@/lib/permissions";
 import { lookups, searchVisits } from "@/lib/queries";
 
 export default async function VisitsPage({
@@ -35,13 +36,18 @@ export default async function VisitsPage({
           </>
         }
       />
+      {params.error ? (
+        <p className="mb-3 rounded-md border border-[#ead8d8] bg-[var(--tint-peach)] px-3 py-2 text-[13px] text-[var(--brand-ink)]">
+          {params.error}
+        </p>
+      ) : null}
       {params.saved ? (
         <p className="mb-3 rounded-md border border-[#cfe6d6] bg-[#eef7f2] px-3 py-2 text-[13px] text-[#1f7a4d]">
           Visit {params.saved} was added and the list is up to date.
         </p>
       ) : null}
       <VisitFilters departments={departments} defaults={params} />
-      <VisitTable visits={visits} />
+      <VisitTable visits={visits.map((visit) => ({ ...visit, canCancel: mayCancelVisit(session, visit) }))} />
     </div>
   );
 }

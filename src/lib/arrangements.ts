@@ -5,6 +5,7 @@ import { fmtDate, fmtTime } from "./format";
 import { notify, notifyRoles } from "./notify";
 import { isRoomBooker } from "./access";
 import { canApproveGatePass, canApproveGift, canCompleteDriver, canManageIntake, canSeeGifts, canSeePasses, isGatePassApprover, type SessionUser } from "./permissions";
+import { TERMINAL_STATUSES } from "./constants";
 import { saveGatePassFile } from "./gate-pass-file";
 
 type VisitParty = {
@@ -486,10 +487,18 @@ export async function listGiftQueue(session: SessionUser) {
 
 export async function listGatePassQueue(session: SessionUser) {
   if (!canSeePasses(session)) throw new Error("You cannot open gate pass requests.");
+  const now = new Date();
   return prisma.visit.findMany({
     where: {
-      gatePassRequired: true,
-      gatePassStatus: { in: ["PENDING", "PREPARING"] },
+      status: { notIn: [...TERMINAL_STATUSES] },
+      expectedArrival: { gte: now },
+      OR: [
+        { gatePassRequired: true, gatePassStatus: { in: ["PENDING", "PREPARING"] } },
+        { visitors: { some: { gatePassRequired: true, gatePassStatus: { in: ["PENDING", "PREPARING"] } } } },
+        { gatePassRequired: true, gatePassStatus: "DONE" },
+        { gatePassFile: { not: null } },
+        { visitors: { some: { gatePassFile: { not: null } } } },
+      ],
     },
     include: {
       createdBy: true,

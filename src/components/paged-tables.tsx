@@ -32,7 +32,7 @@ const TASK_STATUSES = [
   { code: "IN_PROGRESS", label: "In progress" },
   { code: "DONE", label: "Done" },
 ] as const;
-import { fmtDate, fmtDateTime, fmtTime, liveDuration, typeLabel } from "@/lib/format";
+import { fmtDate, fmtDateTime, fmtTime, liveDuration, typeLabel, visitHeadline } from "@/lib/format";
 
 export function InsideTable({
   visits,
@@ -480,6 +480,7 @@ export function ApprovalsList({
       visitCode: string;
       visitTitle?: string;
       purpose: string;
+      createdBy?: { name: string } | null;
       status: string;
       hostId: string;
       createdById: string;
@@ -506,12 +507,16 @@ export function ApprovalsList({
               <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div>
                   <Link href={`/visits/${item.visit.id}`} className="font-medium hover:underline">
-                    {item.visit.visitCode}
+                    {visitHeadline({
+                      visitTitle: item.visit.visitTitle,
+                      purpose: item.visit.purpose,
+                      name: item.visit.createdBy?.name || item.visit.host.name,
+                    })}
                   </Link>
                   <div className="mt-1 text-[13px] text-[var(--muted)]">
                     {item.visit.visitors[0]?.visitor.fullName} · {item.visit.host.name} · {item.visit.department.name}
                   </div>
-                  <div className="mt-2 text-[13px]">{item.visit.visitTitle || item.visit.purpose}</div>
+                  <div className="mt-1 text-right text-[11px] text-[var(--faint)]">{item.visit.visitCode}</div>
                   <div className="mt-2 flex items-center gap-2 text-[12px] text-[var(--muted)]">
                     <span>{approvalDesk(item, item.visit)}</span>
                     <span>·</span>
@@ -555,9 +560,12 @@ export function ServiceTaskList({
     service: { label: string };
     visit: {
       visitCode: string;
+      visitTitle?: string | null;
+      purpose?: string | null;
       visitDate: Date | string;
       expectedArrival: Date | string;
       host: { name: string };
+      createdBy?: { name: string } | null;
       visitors: { visitor: { fullName: string } }[];
     };
   }[];
@@ -579,9 +587,13 @@ export function ServiceTaskList({
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
                     <div className="text-[13px] font-medium">{task.service.label}</div>
-                    <div className="text-[12px] text-[var(--muted)]">
-                      {task.visit.visitCode} · {visitor?.fullName || "Guest"} · {task.visit.host.name} · {fmtDate(task.visit.visitDate)} {fmtTime(task.visit.expectedArrival)}
+                    <div className="text-[13px] font-medium">
+                      {visitHeadline({ visitTitle: task.visit.visitTitle, purpose: task.visit.purpose, name: task.visit.createdBy?.name || task.visit.host.name })}
                     </div>
+                    <div className="text-[12px] text-[var(--muted)]">
+                      {visitor?.fullName || "Guest"} · {fmtDate(task.visit.visitDate)} {fmtTime(task.visit.expectedArrival)}
+                    </div>
+                    <div className="text-right text-[11px] text-[var(--faint)]">{task.visit.visitCode}</div>
                     {task.requesterNotes ? <p className="mt-1 text-[13px]">{task.requesterNotes}</p> : null}
                   </div>
                   <span className="need-pill bg-[var(--brand-soft)] text-[var(--brand-ink)]">{status}</span>
@@ -829,8 +841,11 @@ export function HospitalityList({
   visits: {
     id: string;
     visitCode: string;
+    visitTitle?: string | null;
+    purpose?: string | null;
     status: string;
     host: { name: string };
+    createdBy?: { name: string } | null;
     visitDate: Date | string;
     expectedArrival: Date | string;
     fromAbroad: boolean;
@@ -866,10 +881,13 @@ export function HospitalityList({
             <Link key={visit.id} href={`/visits/${visit.id}`} className="block rounded-[10px] border border-[var(--line)] bg-white p-4 hover:border-[var(--brand)]">
               <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div>
-                  <div className="font-medium">{visit.visitors[0]?.visitor.fullName}</div>
-                  <div className="text-[13px] text-[var(--muted)]">
-                    {visit.visitCode} · {visit.host.name} · {fmtDate(visit.visitDate)} {fmtTime(visit.expectedArrival)}
+                  <div className="font-medium">
+                    {visitHeadline({ visitTitle: visit.visitTitle, purpose: visit.purpose, name: visit.createdBy?.name || visit.host.name })}
                   </div>
+                  <div className="text-[13px] text-[var(--muted)]">
+                    {visit.visitors[0]?.visitor.fullName} · {fmtDate(visit.visitDate)} {fmtTime(visit.expectedArrival)}
+                  </div>
+                  <div className="text-right text-[11px] text-[var(--faint)]">{visit.visitCode}</div>
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {visit.pills.map((pill) => (
                       <span key={pill} className="need-pill bg-[#f4ecec] text-[var(--ink)]">

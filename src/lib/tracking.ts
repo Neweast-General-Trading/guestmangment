@@ -1,5 +1,6 @@
 import { addDays, endOfDay, startOfDay, subDays } from "date-fns";
-import { listHqRoomBookings, sameRoom, type HqRoomBooking } from "./graph";
+import { visitHeadline } from "./format";
+import { listHqRoomBookings, sameRoom, visitCodeFromSubject, type HqRoomBooking } from "./graph";
 import { peekInbox } from "./inbox-sync";
 import { notifyOutsideRoomBookings } from "./outside-rooms";
 import { matches } from "./paging";
@@ -270,7 +271,18 @@ export async function loadTracking(filters: TrackingQuery) {
     })),
     outlook,
   );
-  const roomNames = [...new Set(mergedRooms.map((row) => row.roomName).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const titledRooms = mergedRooms.map((row) => {
+    const code = visitCodeFromSubject(row.subject);
+    const visit =
+      visits.find((item) => item.outlookEventId && item.outlookEventId === row.id) ||
+      (code ? visits.find((item) => item.visitCode === code) : undefined);
+    if (!visit) return row;
+    return {
+      ...row,
+      subject: visitHeadline({ visitTitle: visit.visitTitle, purpose: visit.purpose, name: visit.createdBy.name }),
+    };
+  });
+  const roomNames = [...new Set(titledRooms.map((row) => row.roomName).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const bookers = [
     ...new Map(
       mergedRooms
@@ -279,7 +291,7 @@ export async function loadTracking(filters: TrackingQuery) {
     ).values(),
   ].sort((a, b) => a.name.localeCompare(b.name) || a.email.localeCompare(b.email));
   const roomRows = newestFirst(
-    mergedRooms.filter((row) => {
+    titledRooms.filter((row) => {
     if (filters.origin && row.origin !== filters.origin) return false;
     if (filters.room && row.roomName !== filters.room) return false;
     if (filters.booker && row.bookedByEmail.toLowerCase() !== filters.booker.toLowerCase()) return false;

@@ -7,6 +7,8 @@ import {
 } from "@/app/actions";
 import { ArrangementPill } from "@/components/arrangement-status";
 import { FormBusy } from "@/components/form-busy";
+import { FileField } from "@/components/file-field";
+import { GatePassButton } from "@/components/gate-pass-button";
 import { Button, Card, Textarea } from "@/components/ui";
 
 type VisitBits = {
@@ -67,15 +69,19 @@ export function ArrangementDesk({
       status: person.giftStatus,
       detail: person.giftType,
     }));
-  const passPeople = (visit.visitors || [])
-    .filter((person) => person.gatePassRequired)
-    .map((person) => ({
-      id: person.id,
-      name: person.visitor.fullName,
-      status: person.gatePassStatus,
-      attachmentsJson: person.attachmentsJson,
-      href: person.gatePassFile ? `/api/gate-passes/${visit.id}/${person.id}` : "",
-    }));
+  const flaggedPasses = (visit.visitors || []).filter((person) => person.gatePassRequired);
+  const passSource = flaggedPasses.length ? flaggedPasses : visit.gatePassRequired ? visit.visitors || [] : [];
+  const passPeople = passSource.map((person) => ({
+    id: person.id,
+    name: person.visitor.fullName,
+    status: person.gatePassStatus || (flaggedPasses.length ? null : visit.gatePassStatus),
+    attachmentsJson: person.attachmentsJson,
+    href: person.gatePassFile
+      ? `/api/gate-passes/${visit.id}/${person.id}`
+      : !flaggedPasses.length && visit.gatePassFile
+        ? `/api/gate-passes/${visit.id}`
+        : "",
+  }));
 
   return (
     <div className={`grid gap-3 lg:grid-cols-2 ${from === "intake" ? "mb-5" : ""}`}>
@@ -186,11 +192,7 @@ export function ArrangementDesk({
                   <p className="text-[14px] font-medium">{person.name}</p>
                   <ArrangementPill status={person.status} />
                 </div>
-                {person.href ? (
-                  <a className="mt-2 inline-block text-[13px] font-medium text-[var(--brand-ink)]" href={person.href}>
-                    Open gate pass
-                  </a>
-                ) : null}
+                {person.href ? <GatePassButton href={person.href} /> : null}
                 {canApprovePass && waiting ? (
                   <form action={approveGatePassAction} className="mt-3 space-y-2">
                     <FormBusy label="Approving gate pass…" />
@@ -207,7 +209,7 @@ export function ArrangementDesk({
                     <input type="hidden" name="visitId" value={visit.id} />
                     <input type="hidden" name="linkId" value={person.id} />
                     <input type="hidden" name="from" value={from} />
-                    <input name="file" type="file" accept="application/pdf,image/png,image/jpeg,image/webp" required className="block w-full text-[13px]" />
+                    <FileField name="file" accept="application/pdf,image/png,image/jpeg,image/webp" required />
                     <Textarea name="note" placeholder="Note (optional)" className="min-h-16" />
                     <Button type="submit">Upload gate pass</Button>
                   </form>
@@ -230,7 +232,11 @@ export function ArrangementDesk({
                 ? "Approved. Upload the gate pass."
                 : "Gate pass file is ready."}
           </p>
+          {(visit.visitors || []).length ? (
+            <p className="mt-2 text-[15px] font-medium">{(visit.visitors || []).map((person) => person.visitor.fullName).join(", ")}</p>
+          ) : null}
           {visit.gatePassNote ? <p className="mt-2 whitespace-pre-wrap text-[13px]">{visit.gatePassNote}</p> : null}
+          {visit.gatePassFile ? <GatePassButton href={`/api/gate-passes/${visit.id}`} /> : null}
           {canApprovePass && (visit.gatePassStatus === "PENDING" || !visit.gatePassStatus) ? (
             <form action={approveGatePassAction} className="mt-3 space-y-2">
               <FormBusy label="Approving gate pass…" />
@@ -245,7 +251,7 @@ export function ArrangementDesk({
               <p className="text-[13px] font-medium">Upload gate pass</p>
               <input type="hidden" name="visitId" value={visit.id} />
               <input type="hidden" name="from" value={from} />
-              <input name="file" type="file" accept="application/pdf,image/png,image/jpeg,image/webp" required className="block w-full text-[13px]" />
+              <FileField name="file" accept="application/pdf,image/png,image/jpeg,image/webp" required />
               <Textarea name="note" placeholder="Note (optional)" className="min-h-16" />
               <Button type="submit">Upload gate pass</Button>
             </form>

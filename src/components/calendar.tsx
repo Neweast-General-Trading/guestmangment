@@ -124,8 +124,9 @@ export function VisitCalendar({ visits }: { visits: CalendarVisit[] }) {
                   <span className="h-2 w-2 rounded-full" style={{ background: TYPE_COLOR[item.type] }} />
                 </div>
                 <div className="mt-1 text-[12px] text-[var(--muted)]">
-                  {item.time} · {item.visitCode} · {STATUS_LABEL[item.status as VisitStatus] ?? item.status}
+                  {item.time} · {STATUS_LABEL[item.status as VisitStatus] ?? item.status}
                 </div>
+                <div className="mt-1 text-right text-[11px] text-[var(--faint)]">{item.visitCode}</div>
                 <div className="mt-2 flex flex-wrap gap-1">
                   {item.fromAbroad ? <span className="need-pill bg-[var(--brand-soft)] text-[var(--brand-ink)]">From abroad</span> : null}
                   {item.hotelRequired ? <span className="need-pill bg-[#e8f1f8] text-[#1d4f7a]">Hotel</span> : null}

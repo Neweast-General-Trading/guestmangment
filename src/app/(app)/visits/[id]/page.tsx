@@ -1,7 +1,6 @@
 import { notFound } from "next/navigation";
 import {
   arriveAction,
-  cancelVisitAction,
   checkInAction,
   checkOutAction,
   decideAction,
@@ -13,6 +12,8 @@ import {
   verifyAction,
 } from "@/app/actions";
 import { ApprovalTrack } from "@/components/approval-track";
+import { CancelVisit } from "@/components/cancel-visit";
+import { GatePassFiles } from "@/components/gate-pass-files";
 import { QrCard } from "@/components/qr-card";
 import { VisitStatus, TypeTag } from "@/components/status";
 import { Button, Card, PageHeader, TextInput, Textarea } from "@/components/ui";
@@ -25,7 +26,8 @@ import { fmtDate, fmtDateTime, fmtDuration, fmtTime, liveDuration, maskId, typeL
 import { prisma } from "@/lib/prisma";
 import { meetingRoomOptions } from "@/lib/graph";
 import { lookups } from "@/lib/queries";
-import { canAssignParking, canDecideApproval, canOperateGate, canSeeIdentity, canSeeInternalNotes } from "@/lib/permissions";
+import { canAssignParking, canDecideApproval, canManageIntake, canOperateGate, canSeeIdentity, canSeeInternalNotes, canSeePasses, mayCancelVisit } from "@/lib/permissions";
+import { preparationNote } from "@/lib/preparation";
 import { primaryVisitor, sanitizeVisit, visitInclude, visitWhereFor } from "@/lib/visits";
 import { hasHospitality, mealSummary } from "@/lib/hospitality";
 import { checkInModeLabel, needLabel, selectedFromVisit } from "@/lib/guest-needs";
@@ -63,24 +65,30 @@ export default async function VisitDetailPage({
   const inviteUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? ""}/invite/${visit.qrToken}`;
   const guestNeeds = selectedFromVisit(visit);
 
-  const closed = ["COMPLETED", "CHECKED_OUT", "CANCELLED", "NO_SHOW", "REJECTED", "EXPIRED", "ACCESS_DENIED"];
-  const canCancel = !closed.includes(visit.status) && !visit.checkInAt;
+  const canCancel = mayCancelVisit(session, visit);
   const canPark = canAssignParking(session.role, { actorId: session.id, hostId: visit.hostId });
   const hasActions =
     visit.status === "DRAFT" ||
     (visit.status === "PENDING_APPROVAL" && canDecide) ||
     visit.status === "APPROVED" ||
     canOperateGate(session.role) ||
-    canCancel ||
     canPark;
 
   return (
     <div>
       <PageHeader
         title={`${(visit.visitTitle || visit.purpose || "Guest visit").trim()} - ${visit.createdBy.name}`}
-        description={`${visit.meetingRoom || "Room not set"} · ${visit.visitCode}`}
+        description={[`${visit.meetingRoom || "Room not set"} · ${visit.visitCode}`, preparationNote(visit)].filter(Boolean).join(" · ")}
+        actions={canCancel ? <CancelVisit visitId={visit.id} returnTo={`/visits/${visit.id}`} /> : undefined}
       />
       {error ? <p className="mb-4 rounded-md border border-[#ead8d8] bg-[var(--tint-peach)] px-3 py-2 text-[13px] text-[var(--brand-ink)]">{error}</p> : null}
+      {visit.createdById === session.id || canSeePasses(session) || canManageIntake(session.role) ? (
+        <GatePassFiles
+          visitId={visit.id}
+          visitFile={visit.gatePassFile}
+          people={visit.visitors.map((link) => ({ id: link.id, name: link.visitor.fullName, file: link.gatePassFile }))}
+        />
+      ) : null}
       {intakeOpen ? (
         <p className="mb-4 rounded-md border border-[#d6e2ee] bg-[var(--tint-sky)] px-3 py-2 text-[13px]">
           This request is still on Email intake.{" "}
@@ -432,13 +440,6 @@ export default async function VisitDetailPage({
                     </form>
                   ) : null}
 
-                  {canCancel ? (
-                    <form action={cancelVisitAction} className="flex gap-2 pt-1">
-                      <input type="hidden" name="visitId" value={visit.id} />
-                      <TextInput name="reason" placeholder="Cancel reason" required />
-                      <Button type="submit" variant="ghost">Cancel</Button>
-                    </form>
-                  ) : null}
                 </div>
               </section>
             ) : null}

@@ -32,7 +32,14 @@ const TONE: Record<string, string> = {
 
 export function StatusPill({ status, label }: { status: string; label?: string }) {
   const text = label || STATUS_LABEL[status as VisitStatus] || status;
-  const tone = text === "Ready" ? "bg-[#e8f6ee] text-[#1f7a4d]" : TONE[status] ?? "bg-[#f1f2f4] text-[#5f6672]";
+  const tone =
+    text === "Ready"
+      ? "bg-[#e8f6ee] text-[#1f7a4d]"
+      : text === "Meeting room confirmed"
+        ? "bg-[#f8f1de] text-[#9a6b20]"
+        : text === "Preparing"
+          ? "bg-[#e8f1f8] text-[#1d4f7a]"
+          : TONE[status] ?? "bg-[#f1f2f4] text-[#5f6672]";
   return (
     <span className={`inline-flex h-6 shrink-0 items-center rounded-full px-2 text-[11px] font-medium whitespace-nowrap ${tone}`}>
       {text}

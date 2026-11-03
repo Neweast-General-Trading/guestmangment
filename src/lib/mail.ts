@@ -271,6 +271,68 @@ export async function sendCalendarInviteEmail(input: {
   });
 }
 
+export async function sendCalendarCancelEmail(input: {
+  to: string;
+  name: string;
+  fromName: string;
+  subject: string;
+  reason: string;
+  start: Date;
+  end: Date;
+  location: string;
+  uid: string;
+}) {
+  if (!guestMailEnabled()) throw new Error("Guest mailbox send is not configured.");
+  const { box } = guestFrom();
+  const to = tidyEmail(input.to);
+  if (!to) return;
+  const fromName = input.fromName.trim() || "NEWEAST Guest Management";
+  const from = `"${fromName.replace(/["\\]/g, "")}" <${box}>`;
+  const envelope = mailEnvelope(to);
+  const reason = input.reason.trim();
+  const text = [
+    `Hello ${input.name.trim() || "there"},`,
+    "",
+    "Your invitation to this meeting was cancelled. The meeting stays on for everyone else.",
+    "",
+    `Reason: ${reason}`,
+    `When: ${fmtDate(input.start)} · ${fmtTime(input.start)} – ${fmtTime(input.end)}`,
+    `Room: ${input.location}`,
+    "",
+    "This message was sent automatically. Please do not reply.",
+  ].join("\n");
+  const ics = [
+    "BEGIN:VCALENDAR",
+    "PRODID:-//NEWEAST//Guest Management//EN",
+    "VERSION:2.0",
+    "CALSCALE:GREGORIAN",
+    "METHOD:CANCEL",
+    "BEGIN:VEVENT",
+    `UID:${input.uid}`,
+    `DTSTAMP:${icsStamp(new Date())}`,
+    `DTSTART:${icsStamp(input.start)}`,
+    `DTEND:${icsStamp(input.end)}`,
+    `SUMMARY:${icsText(input.subject)}`,
+    `LOCATION:${icsText(input.location)}`,
+    `DESCRIPTION:${icsText(reason)}`,
+    `ORGANIZER;CN=${icsText(fromName)}:mailto:${box}`,
+    `ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=DECLINED;CN=${icsText(input.name)}:mailto:${to}`,
+    "STATUS:CANCELLED",
+    "SEQUENCE:1",
+    "END:VEVENT",
+    "END:VCALENDAR",
+  ].join("\r\n");
+  await getGuestTransporter().sendMail({
+    from,
+    replyTo: box,
+    to: envelope.to,
+    ...(envelope.bcc ? { bcc: envelope.bcc } : {}),
+    subject: input.subject,
+    text,
+    icalEvent: { filename: "meeting.ics", method: "CANCEL", content: ics },
+  });
+}
+
 export function greetFirstName(name: string) {
   return name.trim().split(/\s+/).filter(Boolean)[0] || "there";
 }

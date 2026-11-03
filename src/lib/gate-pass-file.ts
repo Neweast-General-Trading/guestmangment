@@ -21,6 +21,12 @@ export async function saveGatePassFile(visitId: string, file?: File | null, pers
   return { name, type: TYPES[ext] };
 }
 
+export function gatePassDisposition(name: string, download: boolean) {
+  const ext = path.extname(name).toLowerCase();
+  const filename = `gate-pass${TYPES[ext] ? ext : ""}`;
+  return `${download ? "attachment" : "inline"}; filename="${filename}"`;
+}
+
 export async function readGatePassFile(name: string) {
   const base = path.basename(name);
   const ext = path.extname(base).toLowerCase();

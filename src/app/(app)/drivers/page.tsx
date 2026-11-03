@@ -6,6 +6,7 @@ import { Card, PageHeader } from "@/components/ui";
 import { requireSession } from "@/lib/auth";
 import { GUEST_KIND_LABEL, type GuestKind } from "@/lib/constants";
 import { fmtDateTime } from "@/lib/format";
+import { preparationNote } from "@/lib/preparation";
 import { canSeeDrivers } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
@@ -60,7 +61,9 @@ export default async function DriverRequestsPage({
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="text-[15px] font-medium">{(visit.visitTitle || visit.purpose || "Guest visit").trim()} - {visit.createdBy.name}</div>
-                      <div className="mt-1 text-[13px] text-[var(--muted)]">{visit.meetingRoom || "Room not set"}</div>
+                      <div className="mt-1 text-[13px] text-[var(--muted)]">
+                        {[visit.meetingRoom || "Room not set", preparationNote(visit)].filter(Boolean).join(" · ")}
+                      </div>
                     </div>
                     <div className="flex shrink-0 flex-wrap justify-end gap-1">
                       <TypeTag>{GUEST_KIND_LABEL[kind]}</TypeTag>

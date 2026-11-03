@@ -34,7 +34,7 @@ import { bookStaffRoomHold, cancelStaffRoomHold, releaseVisitConfirmations } fro
 import { assertFutureVisit } from "@/lib/visit-schedule";
 import { confirmIntake, decideEscalation, escalateIntake, ingestEmailText, submitIntake, updateIntakeVisit } from "@/lib/intake";
 import { approveGatePass, approveGift, giftFromForm, markDriverDone, markGatePassDone, markGiftDone } from "@/lib/arrangements";
-import { createReceptionDeskVisit, createStaffRequest, decideStaffRequest, updateStaffRequest } from "@/lib/staff-request";
+import { cancelVisitGuest, cancelVisitInvitee, createReceptionDeskVisit, createStaffRequest, decideStaffRequest, updateStaffRequest } from "@/lib/staff-request";
 import { syncGuestInbox } from "@/lib/inbox-sync";
 import { isKnownGuestKind } from "@/lib/email-template";
 import { parseTourType } from "@/lib/constants";
@@ -134,14 +134,58 @@ export async function submitVisitAction(visitId: string) {
   refresh();
 }
 
+function safeReturn(value: string, fallback: string) {
+  if (value.startsWith("/") && !value.startsWith("//") && !value.includes("\\")) return value;
+  return fallback;
+}
+
 export async function cancelVisitAction(formData: FormData) {
   const session = await requireSession();
   if (!session) redirect("/login");
-  const visitId = String(formData.get("visitId"));
-  const reason = String(formData.get("reason") || "Cancelled");
+  const visitId = String(formData.get("visitId") || "");
+  const reason = String(formData.get("reason") || "").trim();
+  const back = safeReturn(String(formData.get("returnTo") || ""), visitId ? `/visits/${visitId}` : "/visits");
+  const join = back.includes("?") ? "&" : "?";
+  if (!reason) redirect(`${back}${join}error=${encodeURIComponent("Write a cancellation reason.")}`);
   const source = session.role === "HR_ADMIN" || session.role === "SYSTEM_ADMIN" ? "ADMIN" : "HOST";
-  await cancelVisit(session, visitId, reason, source);
+  try {
+    await cancelVisit(session, visitId, reason, source);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not cancel this visit.";
+    redirect(`${back}${join}error=${encodeURIComponent(message)}`);
+  }
   refresh();
+  redirect(back);
+}
+
+export async function cancelInviteeAction(formData: FormData) {
+  const session = await requireSession();
+  if (!session) return { error: "Sign in again." };
+  const visitId = String(formData.get("visitId") || "");
+  const email = String(formData.get("email") || "");
+  const reason = String(formData.get("reason") || "");
+  try {
+    await cancelVisitInvitee(session, visitId, email, reason);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Could not cancel this person." };
+  }
+  refresh();
+  return { ok: true as const };
+}
+
+export async function cancelGuestAction(formData: FormData) {
+  const session = await requireSession();
+  if (!session) return { error: "Sign in again." };
+  const visitId = String(formData.get("visitId") || "");
+  const linkId = String(formData.get("linkId") || "");
+  const reason = String(formData.get("reason") || "");
+  try {
+    await cancelVisitGuest(session, visitId, linkId, reason);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Could not cancel this guest." };
+  }
+  refresh();
+  return { ok: true as const };
 }
 
 export async function decideAction(formData: FormData) {
@@ -737,7 +781,7 @@ export async function completeGatePassAction(formData: FormData) {
   }
   refresh();
   const from = String(formData.get("from") || "intake");
-  redirect(from === "passes" ? "/passes?received=1" : `/intake/${visitId}?pass=1`);
+  redirect(from === "passes" ? "/passes?tab=ready&received=1" : `/intake/${visitId}?pass=1`);
 }
 
 export async function syncInboxAction() {
@@ -784,6 +828,13 @@ export async function confirmIntakeAction(formData: FormData) {
   const session = await requireSession();
   if (!session) redirect("/login");
   const visitId = String(formData.get("visitId") || "");
+  const existing = await prisma.visit.findUnique({
+    where: { id: visitId },
+    select: { calendarInvitedAt: true, roomConfirmRepliedAt: true },
+  });
+  if (existing?.calendarInvitedAt || existing?.roomConfirmRepliedAt) {
+    redirect(`/intake/${visitId}?confirmed=1`);
+  }
   try {
     await saveIntakeFromForm(session, formData);
     await confirmIntake(session, visitId, {

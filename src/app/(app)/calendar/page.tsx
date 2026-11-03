@@ -2,6 +2,7 @@ import { format } from "date-fns";
 import { PageHeader } from "@/components/ui";
 import { VisitCalendar } from "@/components/calendar";
 import { requireSession } from "@/lib/auth";
+import { visitHeadline } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 import { visitWhereFor } from "@/lib/visits";
 
@@ -12,7 +13,10 @@ export default async function CalendarPage() {
     where: {
       AND: [visitWhereFor(session), { status: { notIn: ["CANCELLED", "REJECTED", "DRAFT"] } }],
     },
-    include: { visitors: { include: { visitor: true }, where: { isPrimary: true } } },
+    include: {
+      createdBy: { select: { name: true } },
+      visitors: { include: { visitor: true }, where: { isPrimary: true } },
+    },
     orderBy: { expectedArrival: "asc" },
   });
 
@@ -26,7 +30,7 @@ export default async function CalendarPage() {
         visits={visits.map((visit) => ({
           id: visit.id,
           visitCode: visit.visitCode,
-          name: visit.visitors[0]?.visitor.fullName ?? visit.visitCode,
+          name: visitHeadline({ visitTitle: visit.visitTitle, purpose: visit.purpose, name: visit.createdBy.name }),
           type: visit.type,
           status: visit.status,
           date: visit.visitDate.toISOString(),

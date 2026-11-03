@@ -16,6 +16,12 @@ export function fmtDateTime(value: Date | string | null | undefined) {
   return format(new Date(value), "dd MMM yyyy · HH:mm");
 }
 
+export function namedMeetingRoom(value?: string | null) {
+  const room = (value || "").trim();
+  if (!room || /^n\/?a$/i.test(room) || /^yes$/i.test(room)) return "";
+  return room;
+}
+
 export function fmtDayLabel(value: Date | string) {
   const date = new Date(value);
   if (isToday(date)) return "Today";
@@ -35,6 +41,12 @@ export function fmtDuration(minutes: number | null | undefined) {
 export function liveDuration(checkInAt: Date | string | null | undefined) {
   if (!checkInAt) return "—";
   return formatDistanceStrict(new Date(checkInAt), new Date());
+}
+
+export function visitHeadline(input: { visitTitle?: string | null; purpose?: string | null; name?: string | null }) {
+  const title = (input.visitTitle || input.purpose || "Guest visit").trim();
+  const name = (input.name || "").trim();
+  return name ? `${title} - ${name}` : title;
 }
 
 export function statusLabel(status: string) {

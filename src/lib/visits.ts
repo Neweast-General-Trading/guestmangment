@@ -7,7 +7,7 @@ import { startApprovals } from "./approvals";
 import { makeQrToken, nextBadgeNumber, nextVisitCode } from "./ids";
 import { sendVisitInvitationEmail } from "./mail";
 import { isParkingSlot, remapLegacyParkingSlot } from "./parking";
-import { canAssignParking, canOperateGate, canSeeAllVisits, canSeeIdentity, isInside, type SessionUser } from "./permissions";
+import { canAssignParking, canOperateGate, canSeeAllVisits, canSeeIdentity, isInside, mayCancelVisit, type SessionUser } from "./permissions";
 import { parseQrPayload } from "./qr";
 import { hospitalityData, type HospitalityInput } from "./hospitality";
 import { flagsFromNeeds, parseGuestNeeds } from "./guest-needs";
@@ -347,22 +347,25 @@ export async function cancelVisit(
   source: "HOST" | "ADMIN" | "VISITOR",
 ) {
   const visit = await prisma.visit.findUniqueOrThrow({ where: { id: visitId } });
+  const note = reason.trim();
+  if (!note) throw new Error("Write a cancellation reason.");
+  if (!mayCancelVisit(actor, visit)) throw new Error("You cannot cancel this visit.");
   if (isInside(visit.status)) throw new Error("Check the visitor out before cancelling.");
   if (["COMPLETED", "CHECKED_OUT", "CANCELLED"].includes(visit.status)) {
     throw new Error("This visit is already closed.");
   }
-  await emailVisitCancelled(visitId, reason);
+  await emailVisitCancelled(visitId, note);
   await prisma.visit.update({
     where: { id: visitId },
     data: {
       status: "CANCELLED",
       cancelledBy: actor.id,
-      cancelReason: reason,
+      cancelReason: note,
       cancelSource: source,
     },
   });
-  await releaseOutlookRoom(visitId, { notify: false, reason });
-  await addTimeline({ visitId, event: "Visit cancelled", note: `${source}: ${reason}`, userId: actor.id });
+  await releaseOutlookRoom(visitId, { notify: false, reason: note });
+  await addTimeline({ visitId, event: "Visit cancelled", note: `${source}: ${note}`, userId: actor.id });
   await writeAudit({
     userId: actor.id,
     visitId,
@@ -376,7 +379,7 @@ export async function cancelVisit(
     visitId,
     type: "VISIT_CANCELLED",
     title: "Visit cancelled",
-    message: `${visit.visitCode} was cancelled. ${reason}`,
+    message: `${visit.visitCode} was cancelled. ${note}`,
   });
 }
 

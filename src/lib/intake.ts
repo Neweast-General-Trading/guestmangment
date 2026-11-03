@@ -252,7 +252,7 @@ export async function updateIntakeVisit(
       type: visitTypeFromKind(input.guestKind),
       guestKind: input.guestKind,
       vip: input.guestKind === "VIP",
-      meetingRoom: input.meetingRoom?.trim() || null,
+      meetingRoom: input.meetingRoom?.trim() || visit.meetingRoom,
       driverRequired: input.driverRequired,
       driverName: input.driverName?.trim() || null,
       driverMobile: input.driverMobile?.trim() || null,
