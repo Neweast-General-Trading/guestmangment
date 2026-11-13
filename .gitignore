@@ -52,6 +52,10 @@ yarn-error.log*
 
 # duplicate local copies
 /Guest-Management.pptx
+.next.pre-*/
+/node_modules.pre-*/
+package.json.pre-*
+package-lock.json.pre-*
 
 # vercel
 .vercel

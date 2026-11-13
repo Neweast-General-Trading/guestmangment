@@ -1,3 +1,4 @@
+import { requestNow } from "@/lib/visit-order";
 import { endOfDay, startOfDay } from "date-fns";
 import { PageHeader } from "@/components/ui";
 import { VisitTable } from "@/components/visit-table";
@@ -19,7 +20,7 @@ export default async function TodayPage() {
   return (
     <div>
       <PageHeader title="Today's visitors" description="Every visit scheduled for Headquarters today." />
-      <VisitTable visits={visits} empty="No visitors scheduled today." />
+      <VisitTable visits={visits} now={requestNow()} empty="No visitors scheduled today." />
     </div>
   );
 }

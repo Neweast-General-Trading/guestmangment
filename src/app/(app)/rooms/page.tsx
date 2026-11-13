@@ -20,7 +20,7 @@ function dubaiToday() {
 export default async function RoomsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ date?: string; error?: string; booked?: string; cancelled?: string }>;
+  searchParams: Promise<{ date?: string; error?: string; booked?: string; cancelled?: string; files?: string }>;
 }) {
   const session = await requireSession();
   if (!session) return null;
@@ -62,8 +62,8 @@ export default async function RoomsPage({
         title={roomBooker && !canManageIntake(session.role) ? "Room booking" : "Meeting rooms"}
         description={
           manage
-            ? "Room availability first. Meetings sit underneath, in tabs: Ready, Meeting room confirmed, Pending, and Cancelled."
-            : "Room availability and the meetings booked in each hall."
+            ? "Every room on one timeline: who has it, until when, and what is free. Click free space to book. Meetings and waiting requests follow, soonest first."
+            : "Every room on one timeline, and the meetings booked in each."
         }
       />
       {query.error ? (
@@ -73,7 +73,12 @@ export default async function RoomsPage({
       ) : null}
       {query.booked ? (
         <p className="mb-4 rounded-md border border-[#d7e6da] bg-[var(--tint-sage)] px-3 py-2 text-[13px]">
-          Room booked. {guestMailbox()} emails the people on the invitation now. Guests are not included.
+          Room booked. The invitation goes out when the meeting room accepts. Guests are not included.
+        </p>
+      ) : null}
+      {query.files ? (
+        <p className="mb-4 rounded-md border border-[#ead8d8] bg-[var(--tint-peach)] px-3 py-2 text-[13px] text-[var(--brand-ink)]">
+          {query.files}
         </p>
       ) : null}
       {query.cancelled ? (

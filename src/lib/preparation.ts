@@ -76,6 +76,53 @@ export function preparationNote(visit: PreparationVisit) {
   return waiting.length ? `Waiting on ${waiting.join(", ")}` : "";
 }
 
+const GAP_OWNER: Record<string, string> = {
+  "Meeting room": "Reception",
+  Driver: "Sachini",
+  "Gate pass": "Muna",
+  Gift: "Jesman",
+  "Building tour": "Salma Moufallah",
+};
+
+function gapPhrase(gap: string) {
+  if (gap === "Meeting room") return "no meeting room was chosen";
+  if (gap === "Driver") return "the driver is not confirmed";
+  if (gap === "Gate pass") return "the gate pass is not uploaded";
+  if (gap === "Gift") return "the gift is not ready";
+  if (gap === "Building tour") return "the building tour is not approved";
+  return gap;
+}
+
+function joinList(items: string[]) {
+  if (items.length <= 1) return items[0] || "";
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
+export function pendingBecause(visit: PreparationVisit, hold: "unbooked" | "awaiting-accept") {
+  const room = (visit.meetingRoom || "").trim();
+  const roomMissing = !roomReady(visit);
+  const extra = preparationGaps(visit).filter((gap) => gap !== "Meeting room");
+  const reasons: string[] = [];
+  const who: string[] = [];
+  if (roomMissing) {
+    reasons.push(gapPhrase("Meeting room"));
+    who.push("Reception");
+  } else if (hold === "unbooked") {
+    reasons.push(`${room} is not booked yet`);
+    who.push("Reception");
+  } else {
+    reasons.push(`${room} has not accepted`);
+    who.push(room);
+  }
+  for (const gap of extra) {
+    reasons.push(gapPhrase(gap));
+    const owner = GAP_OWNER[gap];
+    if (owner && !who.includes(owner)) who.push(owner);
+  }
+  return `Pending because ${joinList(reasons)}. Waiting on ${joinList(who)}.`;
+}
+
 export function preparationLabel(visit: PreparationVisit) {
   if (visit.status !== "INTAKE" && visit.status !== "EXPECTED") return undefined;
   if (preparationReady(visit)) return "Ready";

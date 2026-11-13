@@ -58,7 +58,7 @@ export function canManageIntake(role: Role) {
   return role === "SYSTEM_ADMIN" || role === "HR_ADMIN";
 }
 
-const CLOSED_VISIT = new Set(["COMPLETED", "CHECKED_OUT", "CANCELLED", "NO_SHOW", "REJECTED", "EXPIRED", "ACCESS_DENIED"]);
+const CLOSED_VISIT = new Set(["COMPLETED", "CHECKED_OUT", "CANCELLED", "NO_SHOW", "REJECTED", "EXPIRED", "ACCESS_DENIED", "PASSED"]);
 
 export function mayCancelVisit(
   actor: { id: string; role: Role },
@@ -208,6 +208,7 @@ function fullAccessNav(): NavGroup[] {
         { href: "/escalations", label: "Building tours" },
         { href: "/access", label: "Access" },
         { href: "/assign-parking", label: "Assign parking" },
+        { href: "/drivers", label: "Driver requests" },
       ],
     },
     {

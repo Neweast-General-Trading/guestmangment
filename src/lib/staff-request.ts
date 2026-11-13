@@ -1,8 +1,8 @@
 import { addTimeline, writeAudit } from "./audit";
 import { startArrangements } from "./arrangements";
-import { SALMA_EMAILS, type GuestKind, type TourType } from "./constants";
+import { SALMA_EMAILS, SAWSAN_EMAILS, type GuestKind, type TourType } from "./constants";
 import { visitTypeFromKind } from "./email-template";
-import { isGuestBookableRoom, roomsWithAvailability } from "./graph";
+import { assertRoomFreeInOutlook, isGuestBookableRoom, placePersonalCalendarMeeting, removePersonalCalendarMeeting } from "./graph";
 import { fmtDate, fmtTime } from "./format";
 import { makeQrToken, nextVisitCode } from "./ids";
 import { notify, notifyRoles } from "./notify";
@@ -18,6 +18,7 @@ import { upsertVisitor } from "./visits";
 const HIDDEN_HOST = "olga@neweast.co";
 
 export type StaffVisitorInput = {
+  linkId?: string;
   fullName: string;
   mobile: string;
   email: string;
@@ -82,6 +83,21 @@ function personFlags(input: StaffRequestInput) {
   }));
 }
 
+export function claimPreviousLink<T extends { id: string; visitorId: string }>(
+  previous: T[],
+  used: Set<string>,
+  linkId: string | undefined,
+  visitorId: string,
+) {
+  const wanted = linkId?.trim();
+  const found =
+    (wanted ? previous.find((link) => link.id === wanted && !used.has(link.id)) : undefined) ||
+    previous.find((link) => link.visitorId === visitorId && !used.has(link.id));
+  if (!found) return undefined;
+  used.add(found.id);
+  return found;
+}
+
 function linkData(
   visitorId: string,
   index: number,
@@ -111,12 +127,33 @@ function linkData(
   };
 }
 
-async function assertRoomFree(room: string, start: Date, end: Date) {
+const OPEN_VISIT_EXCLUDED = ["CANCELLED", "REJECTED", "DRAFT", "COMPLETED", "CHECKED_OUT", "NO_SHOW", "EXPIRED", "ACCESS_DENIED", "PASSED"];
+
+export async function assertRoomFree(room: string, start: Date, end: Date, self?: { visitId?: string; eventId?: string | null }) {
   if (!room) return;
   if (!isGuestBookableRoom(room)) throw new Error("Choose a ground-floor city room.");
-  const availability = await roomsWithAvailability(start, end).catch(() => []);
-  const proposed = availability.find((item) => item.name.toLowerCase() === room.toLowerCase());
-  if (proposed && !proposed.available) throw new Error("That room is already booked. Choose a free room.");
+  // Our own records first: intake requests hold a room here before Outlook has any booking for it.
+  const sameWindow = await prisma.visit.findMany({
+    where: {
+      id: self?.visitId ? { not: self.visitId } : undefined,
+      status: { notIn: OPEN_VISIT_EXCLUDED },
+      expectedArrival: { lt: end, gt: new Date(start.getTime() - 24 * 60 * 60 * 1000) },
+      meetingRoom: { not: null },
+    },
+    select: { visitCode: true, meetingRoom: true, expectedArrival: true, expectedDeparture: true },
+  });
+  const clash = sameWindow.find((visit) => {
+    if ((visit.meetingRoom || "").trim().toLowerCase() !== room.trim().toLowerCase()) return false;
+    const otherEnd =
+      visit.expectedDeparture && visit.expectedDeparture > visit.expectedArrival
+        ? visit.expectedDeparture
+        : new Date(visit.expectedArrival.getTime() + 60 * 60 * 1000);
+    return otherEnd > start;
+  });
+  if (clash) {
+    throw new Error(`${room} is already taken by ${clash.visitCode} at ${fmtTime(clash.expectedArrival)}. Choose another room or time.`);
+  }
+  await assertRoomFreeInOutlook(room, start, end, { eventId: self?.eventId });
 }
 
 async function lineManagerFor(actor: SessionUser) {
@@ -234,6 +271,15 @@ export async function createStaffRequest(actor: SessionUser, input: StaffRequest
     purpose: visitTitle,
     room: proposedRoom || "N/A",
   });
+  await notifySawsanArrival({
+    visitId: visit.id,
+    visitCode: visit.visitCode,
+    kind: input.guestKind,
+    title: visitTitle,
+    when: start,
+    guests: visitorsIn.map((visitor) => visitor.fullName),
+    requesterName: actor.name,
+  });
 
   return { visit, managerName: null as string | null };
 }
@@ -268,17 +314,19 @@ export async function cancelVisitInvitee(actor: SessionUser, visitId: string, em
         : new Date(visit.expectedArrival.getTime() + 60 * 60 * 1000);
     const originator = visit.createdBy.name.trim() || "NEWEAST";
     const title = visit.visitTitle.trim();
+    const subject = title ? `${title} - ${originator}` : originator;
     await sendCalendarCancelEmail({
       to: person.email,
       name: person.name,
       fromName: originator,
-      subject: title ? `${title} - ${originator}` : originator,
+      subject,
       reason: note,
       start: visit.expectedArrival,
       end,
       location: visit.meetingRoom || "Meeting room",
       uid: `${visit.id}@guest.neweast.co`,
     });
+    await removePersonalCalendarMeeting(person.email, { subject, start: visit.expectedArrival }).catch(() => undefined);
   }
   await prisma.visit.update({
     where: { id: visitId },
@@ -343,6 +391,108 @@ export async function cancelVisitGuest(actor: SessionUser, visitId: string, link
   });
 }
 
+function inviteeWasCancelled(notes: { note: string | null }[], person: { email: string; name: string }) {
+  const email = person.email.trim().toLowerCase();
+  const name = person.name.trim().toLowerCase();
+  const local = email.split("@")[0] || "";
+  return notes.some((row) => {
+    const note = (row.note || "").trim().toLowerCase();
+    return note.startsWith(`${name}:`) || Boolean(local && note.startsWith(`${local}:`)) || note.includes(email);
+  });
+}
+
+async function inviteesPutBack(visitId: string, people: { email: string; name: string }[]) {
+  if (!people.length) return [];
+  const notes = await prisma.timelineEvent.findMany({
+    where: { visitId, event: "Invitee cancelled" },
+    select: { note: true },
+  });
+  return people.filter((person) => inviteeWasCancelled(notes, person));
+}
+
+function meetingSubject(title: string, originator: string) {
+  const name = originator.trim() || "NEWEAST";
+  const label = title.trim();
+  return label ? `${label} - ${name}` : name;
+}
+
+function dubaiWhen(start: Date, end: Date) {
+  const day = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Dubai",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  }).format(start);
+  const clock = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Dubai",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  });
+  return `${day}, ${clock.format(start)}–${clock.format(end)}`;
+}
+
+async function placeReturnedInvitees(input: {
+  visit: { id: string; visitTitle: string; createdBy: { name: string } };
+  people: { email: string; name: string }[];
+  start: Date;
+  end: Date;
+  room: string;
+}) {
+  const subject = meetingSubject(input.visit.visitTitle, input.visit.createdBy.name);
+  const placed: string[] = [];
+  for (const person of input.people) {
+    try {
+      await placePersonalCalendarMeeting(person.email, {
+        subject,
+        description: `${dubaiWhen(input.start, input.end)}\n${input.room}`,
+        start: input.start,
+        end: input.end,
+        location: input.room,
+      });
+      placed.push(person.email);
+    } catch {
+      await addTimeline({ visitId: input.visit.id, event: "Calendar place failed", note: person.email });
+    }
+  }
+  if (placed.length) await addTimeline({ visitId: input.visit.id, event: "Calendar placed", note: placed.join(", ") });
+  return placed;
+}
+
+export async function restorePutBackCalendars(visitId: string) {
+  const visit = await prisma.visit.findUnique({
+    where: { id: visitId },
+    include: {
+      createdBy: { select: { name: true } },
+      timeline: { orderBy: { createdAt: "asc" }, select: { event: true, note: true, createdAt: true } },
+    },
+  });
+  if (!visit?.calendarInvitedAt || !visit.meetingRoom) return [];
+  const people = parseStoredInvitees(visit.colleagueInvitees).filter((person) => {
+    const cancelledAt = [...visit.timeline]
+      .reverse()
+      .find((row) => row.event === "Invitee cancelled" && inviteeWasCancelled([row], person))?.createdAt;
+    if (!cancelledAt) return false;
+    return !visit.timeline.some(
+      (row) =>
+        row.createdAt > cancelledAt &&
+        /calendar invitation sent/i.test(row.event) &&
+        (row.note || "").toLowerCase().includes(person.email),
+    );
+  });
+  const end =
+    visit.expectedDeparture && visit.expectedDeparture > visit.expectedArrival
+      ? visit.expectedDeparture
+      : new Date(visit.expectedArrival.getTime() + 60 * 60 * 1000);
+  return placeReturnedInvitees({
+    visit,
+    people,
+    start: visit.expectedArrival,
+    end,
+    room: visit.meetingRoom,
+  });
+}
+
 export async function updateStaffRequest(actor: SessionUser, visitId: string, input: StaffRequestInput) {
   const current = await prisma.visit.findUnique({
     where: { id: visitId },
@@ -365,10 +515,11 @@ export async function updateStaffRequest(actor: SessionUser, visitId: string, in
   const { start, end } = visitEnd(input.visitDate, input.arrivalTime, input.endTime);
   const sameSlot =
     (current.meetingRoom || "").toLowerCase() === proposedRoom.toLowerCase() &&
-    Math.abs(current.expectedArrival.getTime() - start.getTime()) < 60_000;
+    Math.abs(current.expectedArrival.getTime() - start.getTime()) < 60_000 &&
+    Math.abs((current.expectedDeparture?.getTime() ?? 0) - end.getTime()) < 60_000;
   if (!sameSlot) {
     assertFutureVisit(input.visitDate, input.arrivalTime);
-    await assertRoomFree(proposedRoom, start, end);
+    await assertRoomFree(proposedRoom, start, end, { visitId, eventId: current.outlookEventId });
   }
   const department = await prisma.department.findUnique({ where: { id: input.departmentId } });
   if (!department) throw new Error("Choose a department.");
@@ -387,7 +538,8 @@ export async function updateStaffRequest(actor: SessionUser, visitId: string, in
     ),
   );
   const previous = await prisma.visitVisitor.findMany({ where: { visitId } });
-  const previousByVisitor = new Map(previous.map((link) => [link.visitorId, link]));
+  const kept = new Set<string>();
+  const nextInvitees = parseRoomInvitees(input.inviteEmails || [], current.createdById === actor.id ? actor.email : "");
   await prisma.visitVisitor.deleteMany({ where: { visitId } });
   await prisma.visit.update({
     where: { id: visitId },
@@ -410,14 +562,40 @@ export async function updateStaffRequest(actor: SessionUser, visitId: string, in
       giftType: flagged.find((visitor) => visitor.giftRequired)?.giftType || null,
       gatePassRequired: flagged.some((visitor) => visitor.gatePassRequired),
       tourType: input.tourType || "NONE",
-      colleagueInvitees: JSON.stringify(parseRoomInvitees(input.inviteEmails || [], current.createdById === actor.id ? actor.email : "")),
+      colleagueInvitees: JSON.stringify(nextInvitees),
       visitors: {
-        create: visitors.map((visitor, index) => linkData(visitor.id, index, flagged[index], previousByVisitor.get(visitor.id))),
+        create: visitors.map((visitor, index) => {
+          const old = claimPreviousLink(previous, kept, flagged[index]?.linkId, visitor.id);
+          const row = linkData(visitor.id, index, flagged[index], old);
+          return old ? { id: old.id, ...row } : row;
+        }),
       },
     },
   });
   await applyTourType(visitId, input.tourType || "NONE");
-  if (current.outlookEventId) await syncOutlookRoom(visitId, proposedRoom);
+  if (current.outlookEventId) {
+    try {
+      await syncOutlookRoom(visitId, proposedRoom);
+    } catch (error) {
+      // Keep the system and Outlook on the same room and time when Outlook refuses the change.
+      await prisma.visit.update({
+        where: { id: visitId },
+        data: {
+          meetingRoom: current.meetingRoom,
+          expectedArrival: current.expectedArrival,
+          expectedDeparture: current.expectedDeparture,
+          visitDate: current.visitDate,
+        },
+      });
+      throw error;
+    }
+  }
+  if (current.calendarInvitedAt && proposedRoom) {
+    const previousEmails = new Set(parseStoredInvitees(current.colleagueInvitees).map((person) => person.email));
+    const added = nextInvitees.filter((person) => !previousEmails.has(person.email));
+    const returned = await inviteesPutBack(visitId, added);
+    if (returned.length) await placeReturnedInvitees({ visit: current, people: returned, start, end, room: proposedRoom });
+  }
   await startArrangements(visitId);
   await addTimeline({ visitId, event: "Request updated", note: actor.name, userId: actor.id });
   await writeAudit({
@@ -609,6 +787,15 @@ export async function createReceptionDeskVisit(
     newValue: { visitCode: visit.visitCode, room: input.roomName },
   });
   await startArrangements(visit.id);
+  await notifySawsanArrival({
+    visitId: visit.id,
+    visitCode: visit.visitCode,
+    kind: input.guestKind,
+    title: visitTitle,
+    when: start,
+    guests: visitorsIn.map((visitor) => visitor.fullName),
+    requesterName: actor.name,
+  });
   await bookStaffRoomHold(actor, {
     visitId: visit.id,
     roomName: input.roomName.trim(),
@@ -623,6 +810,35 @@ export async function createReceptionDeskVisit(
     guestEmail: visitorsIn[0].email,
   });
   return visit;
+}
+
+const SAWSAN_KINDS = new Set(["GUEST", "VIP", "SUPPLIER"]);
+
+async function notifySawsanArrival(input: {
+  visitId: string;
+  visitCode: string;
+  kind: string;
+  title: string;
+  when: Date;
+  guests: string[];
+  requesterName: string;
+}) {
+  if (!SAWSAN_KINDS.has(input.kind)) return;
+  await notifyNamed({
+    emails: SAWSAN_EMAILS,
+    name: "Sawsan",
+    visitId: input.visitId,
+    type: "INTAKE_READY",
+    title: `${input.visitCode} · ${input.title}`,
+    message: [
+      `${input.requesterName} submitted a ${input.kind.toLowerCase()} visit.`,
+      `Title: ${input.title}`,
+      `Date: ${fmtDate(input.when)} ${fmtTime(input.when)}`,
+      `Guests: ${input.guests.filter(Boolean).join(", ") || "—"}`,
+      `Requester: ${input.requesterName}`,
+      input.visitCode,
+    ].join("\n"),
+  });
 }
 
 export async function notifyStaffVisitConfirmed(visitId: string) {

@@ -1,7 +1,23 @@
-import { addMinutes, endOfDay, startOfDay } from "date-fns";
+import { endOfDay, startOfDay } from "date-fns";
 import { prisma } from "./prisma";
 import { addTimeline } from "./audit";
 import { notify, notifyRoles } from "./notify";
+import { fmtDateTime } from "./format";
+import { visitEnd } from "./visit-order";
+
+/** Statuses that mean "planned, guest not inside yet". Once the visit's time is over they become PASSED. */
+const PASSES_WHEN_OVER = [
+  "INTAKE",
+  "MANAGER_REVIEW",
+  "ESCALATED",
+  "PENDING_APPROVAL",
+  "APPROVED",
+  "INVITATION_SENT",
+  "EXPECTED",
+  "ARRIVED",
+  "WAITING_AT_GATE",
+  "SECURITY_VERIFICATION",
+];
 
 export async function getSetting(key: string, fallback: string) {
   const row = await prisma.systemSetting.findUnique({ where: { key } });
@@ -9,7 +25,6 @@ export async function getSetting(key: string, fallback: string) {
 }
 
 export async function applyLifecycle(now = new Date()) {
-  const windowMinutes = Number(await getSetting("appointment_window_minutes", "120"));
   const todayStart = startOfDay(now);
   const todayEnd = endOfDay(now);
 
@@ -51,21 +66,27 @@ export async function applyLifecycle(now = new Date()) {
     });
   }
 
-  const stale = await prisma.visit.findMany({
+  // A visit whose time is over, and whose guest was never checked in, is Passed and moves to history.
+  // (Checked-in guests still go through check-out / Overdue at the gate.) No notifications are sent.
+  const candidates = await prisma.visit.findMany({
     where: {
-      status: { in: ["APPROVED", "INVITATION_SENT", "EXPECTED"] },
-      expectedArrival: { lt: addMinutes(now, -windowMinutes) },
+      status: { in: PASSES_WHEN_OVER },
+      expectedArrival: { lt: now },
       checkInAt: null,
     },
+    select: { id: true, status: true, expectedArrival: true, expectedDeparture: true },
   });
+  const stale = candidates.filter((visit) => visitEnd(visit).getTime() < now.getTime());
   for (const visit of stale) {
-    const lateSameDay = visit.visitDate >= todayStart && visit.visitDate <= todayEnd;
-    const status = lateSameDay ? "NO_SHOW" : "EXPIRED";
-    await prisma.visit.update({ where: { id: visit.id }, data: { status } });
+    const moved = await prisma.visit.updateMany({
+      where: { id: visit.id, status: visit.status, checkInAt: null },
+      data: { status: "PASSED" },
+    });
+    if (!moved.count) continue;
     await addTimeline({
       visitId: visit.id,
-      event: status === "NO_SHOW" ? "No show" : "Expired",
-      note: `Appointment window of ${windowMinutes} minutes elapsed.`,
+      event: "Passed",
+      note: `Visit time ended ${fmtDateTime(visitEnd(visit))}. Moved to history.`,
     });
   }
 

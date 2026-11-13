@@ -1,3 +1,4 @@
+import { requestNow } from "@/lib/visit-order";
 import { endOfDay } from "date-fns";
 import { PageHeader } from "@/components/ui";
 import { VisitTable } from "@/components/visit-table";
@@ -17,13 +18,13 @@ export default async function UpcomingPage() {
       ],
     },
     include: visitInclude,
-    orderBy: { visitDate: "asc" },
+    orderBy: { expectedArrival: "asc" },
   });
 
   return (
     <div>
-      <PageHeader title="Upcoming visits" description="Approved and planned visits after today." />
-      <VisitTable visits={visits} empty="No upcoming visits." />
+      <PageHeader title="Upcoming visits" description="Approved and planned visits after today, soonest first, grouped by day." />
+      <VisitTable visits={visits} now={requestNow()} empty="No upcoming visits." />
     </div>
   );
 }

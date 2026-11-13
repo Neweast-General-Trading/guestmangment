@@ -13,12 +13,13 @@ import { GUEST_KIND_LABEL, type GuestKind } from "@/lib/constants";
 import { meetingRoomOptions } from "@/lib/graph";
 import { fmtDateTime, namedMeetingRoom } from "@/lib/format";
 import { GuestAttachmentList } from "@/components/guest-attachments";
-import { canApproveGatePass, canApproveGift, canCompleteDriver, canDecideEscalation, canManageIntake, isGatePassApprover, mayCancelVisit } from "@/lib/permissions";
+import { canApproveGatePass, canApproveGift, canCompleteDriver, canDecideEscalation, canManageIntake, canSeePasses, isGatePassApprover, mayCancelVisit } from "@/lib/permissions";
 import { guestDocHref, parseGuestDocs } from "@/lib/guest-doc-types";
 import { canEditStaffRequest } from "@/lib/staff-request";
 import { prisma } from "@/lib/prisma";
 import { lookups } from "@/lib/queries";
-import { preparationNote } from "@/lib/preparation";
+import { preparationLabel, preparationNote } from "@/lib/preparation";
+import { invitationTeamNames } from "@/lib/room-booking";
 import { timeStamp, todayStamp } from "@/lib/visit-schedule";
 import { visitInclude } from "@/lib/visits";
 
@@ -27,16 +28,21 @@ export default async function IntakeDetailPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ error?: string; saved?: string; confirmed?: string; escalated?: string; driver?: string; gift?: string; pass?: string }>;
+  searchParams: Promise<{ error?: string; saved?: string; confirmed?: string; escalated?: string; driver?: string; gift?: string; pass?: string; files?: string }>;
 }) {
   const session = await requireSession();
   if (!session) return null;
   if (!canManageIntake(session.role) && !canDecideEscalation(session)) redirect("/dashboard");
   const { id } = await params;
-  const { error, saved, confirmed, escalated, driver, gift, pass } = await searchParams;
+  const { error, saved, confirmed, escalated, driver, gift, pass, files } = await searchParams;
   const visit = await prisma.visit.findUnique({ where: { id }, include: visitInclude });
   if (!visit || (visit.source !== "EMAIL" && visit.source !== "STAFF")) notFound();
-  const [{ hosts, departments }, rooms] = await Promise.all([lookups(), meetingRoomOptions()]);
+  const [{ hosts, departments }, rooms, directory] = await Promise.all([
+    lookups(),
+    meetingRoomOptions(),
+    prisma.user.findMany({ where: { isActive: true }, select: { email: true, name: true } }),
+  ]);
+  const team = invitationTeamNames(visit.colleagueInvitees, new Map(directory.map((person) => [person.email.toLowerCase(), person.name])));
   const kind = (visit.guestKind || "GUEST") as GuestKind;
   const locked = !["INTAKE", "ESCALATED"].includes(visit.status);
   const storedRoom = namedMeetingRoom(visit.meetingRoom);
@@ -50,7 +56,7 @@ export default async function IntakeDetailPage({
   const roomConfirmed = Boolean(roomName && (visit.roomConfirmRepliedAt || visit.calendarInvitedAt));
   const canEdit = canManageIntake(session.role) && visit.status === "INTAKE";
   const canDecide = visit.status === "ESCALATED" && canDecideEscalation(session);
-  const seeDocs = isGatePassApprover(session);
+  const seeDocs = canManageIntake(session.role) || isGatePassApprover(session) || canSeePasses(session);
 
   return (
     <div>
@@ -92,6 +98,56 @@ export default async function IntakeDetailPage({
               ? "Room booked in Outlook. guest@neweast.co gets the confirmation from the room mailbox. Submit when ready for Security."
               : "Changes saved."}
         </p>
+      ) : null}
+      {files ? (
+        <p className="mb-4 rounded-md border border-[#ead8d8] bg-[var(--tint-peach)] px-3 py-2 text-[13px] text-[var(--brand-ink)]">
+          {files}
+        </p>
+      ) : null}
+
+      <Card className="mb-5">
+        <h2 className="text-sm font-semibold">Guests</h2>
+        <p className="mt-1 text-[12px] text-[var(--muted)]">Each person and the files uploaded for them.</p>
+        <ul className="mt-4 space-y-3">
+          {visit.visitors.map((link) => {
+            const docs = parseGuestDocs(link.attachmentsJson);
+            return (
+              <li key={link.id} className="rounded-2xl border border-[var(--line)] bg-[#fcfafa] px-4 py-3">
+                <div className="text-[15px] font-semibold text-[var(--ink)]">{link.visitor.fullName}</div>
+                <div className="text-[12px] text-[var(--muted)]">
+                  {[link.visitor.company, link.visitor.jobTitle].filter(Boolean).join(" · ") || "Guest"}
+                </div>
+                {docs.length ? (
+                  <ul className="mt-2 space-y-1">
+                    {docs.map((doc) => (
+                      <li key={doc.stored}>
+                        <a className="text-[13px] font-medium text-[var(--brand-ink)]" href={guestDocHref(visit.id, doc.type, link.id, doc.stored)}>
+                          {doc.name}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-2 text-[12px] text-[var(--muted)]">No file uploaded</p>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </Card>
+
+      {team.length ? (
+        <Card className="mb-5">
+          <h2 className="text-sm font-semibold">Invitation team</h2>
+          <p className="mt-1 text-[12px] text-[var(--muted)]">Internal colleagues invited to this meeting.</p>
+          <ul className="mt-3 space-y-1">
+            {team.map((person) => (
+              <li key={person.email} className="text-[13px] text-[var(--ink)]">
+                {person.name}
+              </li>
+            ))}
+          </ul>
+        </Card>
       ) : null}
 
       <div className="mb-5 grid gap-3 lg:grid-cols-3">
@@ -250,6 +306,7 @@ export default async function IntakeDetailPage({
               const own = parseGuestDocs(link.attachmentsJson);
               const legacy = index === 0 && !own.length ? parseGuestDocs(visit.attachmentsJson) : [];
               return {
+                linkId: link.id,
                 fullName: link.visitor.fullName,
                 mobile: link.visitor.mobile.startsWith("inbox:") || link.visitor.mobile.startsWith("pending:") ? "" : link.visitor.mobile,
                 email: link.visitor.email || "",
@@ -268,6 +325,7 @@ export default async function IntakeDetailPage({
             tourType: visit.tourType,
             locked: !canEdit,
             confirmed: roomConfirmed,
+            showConfirm: !roomConfirmed && preparationLabel(visit) === "Ready",
             docs: seeDocs
               ? parseGuestDocs(visit.attachmentsJson).map((doc) => ({
                   type: doc.type,

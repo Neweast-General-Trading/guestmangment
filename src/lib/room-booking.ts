@@ -1,6 +1,6 @@
 import { addTimeline, writeAudit } from "./audit";
 import { fmtDate, fmtTime, visitHeadline } from "./format";
-import { preparationGaps, preparationReady, type PreparationVisit } from "./preparation";
+import { pendingBecause, preparationGaps, preparationLabel, preparationReady, type PreparationVisit } from "./preparation";
 import { notify } from "./notify";
 
 function isPendingContact(value?: string | null) {
@@ -13,7 +13,7 @@ import {
   deleteUserCalendarEvent,
   guestEventRoomReply,
   graphConfigured,
-  outlookTimeUnchanged,
+  outlookRoomAlreadySet,
   sameBookingWindow,
   guestMailbox,
   listGuestDayEvents,
@@ -30,6 +30,7 @@ import { prisma } from "./prisma";
 import { guestDocHref, parseGuestDocs } from "./guest-doc-types";
 import { HANNA_EMAILS, JESMAN_EMAILS, SALMA_EMAILS, SAMIR_EMAILS } from "./constants";
 import { briefVisitStakeholders, visitBlocksConfirm } from "./tours";
+import { maybeSendVisitDigest, sendReadyVisitDigests } from "./visit-digest";
 
 function bookingError(error: unknown) {
   const message = error instanceof Error ? error.message : "Outlook could not book the room.";
@@ -74,9 +75,11 @@ export async function syncOutlookRoom(visitId: string, roomName?: string | null)
     ? await prisma.roomHold.findFirst({ where: { eventId: visit.outlookEventId, cancelledAt: null } })
     : null;
   if (visit.outlookEventId) {
+    // Room and time both have to match; a room change with the same time must still move the Outlook booking.
     const unchanged = previous
-      ? sameBookingWindow({ start: previous.startAt, end: previous.endAt }, { start, end })
-      : await outlookTimeUnchanged(visit.outlookEventId, start, end, previous ? holdOrganizer(previous) : undefined);
+      ? sameBookingWindow({ start: previous.startAt, end: previous.endAt }, { start, end }) &&
+        previous.roomName.trim().toLowerCase() === name.toLowerCase()
+      : await outlookRoomAlreadySet(visit.outlookEventId, name, start, end);
     if (unchanged) return { booked: true, roomName: name };
   }
   try {
@@ -108,6 +111,10 @@ export async function syncOutlookRoom(visitId: string, roomName?: string | null)
           Math.abs(previous.startAt.getTime() - start.getTime()) >= 60_000 ||
           Math.abs(previous.endAt.getTime() - end.getTime()) >= 60_000),
     );
+    if (visit.outlookEventId && !previous && visit.calendarInvitedAt) {
+      // Colleagues got their invitation as a calendar file; resend it with the new room/time so their calendars update.
+      await sendCalendarInviteUpdate(visitId).catch(() => undefined);
+    }
     if (changed && previous) {
       await notifyBookingChange({
         visitId,
@@ -257,6 +264,16 @@ export function parseRoomInvitees(values: string[], bookerEmail = "") {
 export function omitInvitee(raw: string | null | undefined, email: string) {
   const key = email.trim().toLowerCase();
   return parseStoredInvitees(raw).filter((item) => item.email !== key);
+}
+
+export function invitationTeamNames(raw: string | null | undefined, knownNames: Map<string, string>) {
+  return parseStoredInvitees(raw).map((person) => {
+    const known = knownNames.get(person.email.toLowerCase());
+    const stored = person.name.trim();
+    const local = person.email.split("@")[0]?.toLowerCase();
+    const name = known && (!stored || stored.toLowerCase() === local) ? known : stored || known || person.email;
+    return { email: person.email, name };
+  });
 }
 
 export function parseStoredInvitees(raw?: string | null): RoomInvitee[] {
@@ -465,10 +482,17 @@ async function labelGuestEvents(events: GuestDayEvent[]) {
       ...event,
       stage,
       visitId: visit.id,
+      // The room said no (or a room panel released it) while the visit itself is still on.
+      roomLost: event.roomReply === "declined" && !["CANCELLED", "REJECTED", "PASSED", "COMPLETED"].includes(visit.status),
       href: onIntake ? `/intake/${visit.id}` : `/visits/${visit.id}`,
       subject: visitHeadline({ visitTitle: visit.visitTitle, purpose: visit.purpose, name: visit.createdBy.name }),
       reference: visit.visitCode,
-      waiting: stage === "confirmation" && gaps.length ? `Waiting on ${gaps.join(", ")}` : undefined,
+      waiting:
+        stage === "pending"
+          ? pendingBecause(visit, "awaiting-accept")
+          : stage === "confirmation" && gaps.length
+            ? `Waiting on ${gaps.join(", ")}`
+            : undefined,
     };
   });
 }
@@ -507,6 +531,11 @@ export type RoomDeskVisit = {
     docs: { type: "ID" | "PASSPORT" | "VISA"; name: string; href: string }[];
   }[];
   docs: { type: "ID" | "PASSPORT" | "VISA"; name: string; href: string }[];
+  statusLabel: string;
+  pendingNote: string;
+  submittedAt: number;
+  submittedLabel: string;
+  meetingAt: number;
 };
 
 function clockOf(date: Date) {
@@ -574,7 +603,22 @@ export async function listRoomDeskVisits(): Promise<RoomDeskVisit[]> {
       name: doc.name,
       href: guestDocHref(row.id, doc.type),
     })),
+    statusLabel: preparationLabel(row) || (preparationReady(row) ? "Ready" : "Preparing"),
+    pendingNote: pendingBecause(row, "unbooked"),
+    submittedAt: row.createdAt.getTime(),
+    submittedLabel: dubaiStamp(row.createdAt),
+    meetingAt: row.expectedArrival.getTime(),
   }));
+}
+
+function dubaiStamp(date: Date) {
+  const clock = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Dubai",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(date);
+  return `${dayKey(date)} ${clock}`;
 }
 
 export async function bookStaffRoomHold(
@@ -749,7 +793,8 @@ export async function bookStaffRoomHold(
       note: booked.roomName,
       userId: actor.id,
     });
-    await sendRoomConfirmReply(visit.id).catch(() => undefined);
+    const reply = await guestEventRoomReply(booked.eventId, organizerEmail).catch(() => "pending" as const);
+    if (reply === "accepted") await sendRoomConfirmReply(visit.id, { ignoreTour: true }).catch(() => undefined);
   }
   return booked;
 }
@@ -991,16 +1036,20 @@ async function sendHoldReply(holdId: string, accepted: boolean) {
   if (!hold || hold.cancelledAt) return { sent: false as const };
   const linked = await prisma.visit.findFirst({
     where: { outlookEventId: hold.eventId },
-    select: { tourType: true, tourStatus: true, guestKind: true, type: true, supplierStatus: true, roomConfirmRepliedAt: true },
+    select: { id: true, expectedArrival: true, tourType: true, tourStatus: true, guestKind: true, type: true, supplierStatus: true, roomConfirmRepliedAt: true },
   });
-  if (accepted && linked && visitBlocksConfirm(linked)) return { sent: false as const };
   if (!hold.repliedAt) {
     if (linked?.roomConfirmRepliedAt || accepted) {
       await prisma.roomHold.update({
         where: { id: hold.id },
         data: { repliedAt: new Date(), roomReply: accepted ? "accepted" : "declined" },
       });
-      if (accepted) await confirmHoldCalendars(holdId);
+      if (accepted) {
+        await confirmHoldCalendars(holdId);
+        if (linked && linked.expectedArrival.getTime() >= Date.now() - 60 * 60 * 1000) {
+          await sendRoomConfirmReply(linked.id, { ignoreTour: true }).catch(() => undefined);
+        }
+      }
       return { sent: true as const };
     }
     const stored = parseStoredInvitees(hold.invitees);
@@ -1027,6 +1076,12 @@ async function sendHoldReply(holdId: string, accepted: boolean) {
         /@(neweast\.com|neweast\.co|aisin\.ae)$/i.test(item.email) &&
         list.findIndex((row) => row.email.toLowerCase() === item.email.toLowerCase()) === index,
     );
+    // Claim before mailing so concurrent syncs do not each send the reply.
+    const claimed = await prisma.roomHold.updateMany({
+      where: { id: hold.id, repliedAt: null },
+      data: { repliedAt: new Date(), roomReply: accepted ? "accepted" : "declined" },
+    });
+    if (claimed.count === 0) return { sent: false as const };
     for (const person of recipients) {
       await sendStaffRoomHoldEmail({
         to: person.email,
@@ -1061,12 +1116,49 @@ function meetingDetails(visit: { meetingRoom: string | null; expectedArrival: Da
   return [fmtDate(visit.expectedArrival), visit.meetingRoom || "Meeting room"].join("\n");
 }
 
-async function deliverRoomConfirm(visitId: string) {
+/** Resends the colleagues' calendar file with the visit's current room and time (same UID, higher SEQUENCE). */
+async function sendCalendarInviteUpdate(visitId: string) {
   const visit = await prisma.visit.findUnique({
     where: { id: visitId },
     include: { visitors: { include: { visitor: true } }, createdBy: { select: { id: true, email: true, name: true } } },
   });
-  if (!visit || visit.calendarInvitedAt || visitBlocksConfirm(visit) || !visit.meetingRoom) {
+  if (!visit?.calendarInvitedAt || !visit.meetingRoom) return { sent: 0 };
+  const guestEmails = new Set(
+    visit.visitors.map((link) => (link.visitor.email || "").trim().toLowerCase()).filter((email) => email.includes("@")),
+  );
+  const audience = (await invitationPeople(visit)).filter((person) => !guestEmails.has(person.email));
+  const originator = visit.createdBy.name.trim() || "NEWEAST";
+  const title = visit.visitTitle.trim();
+  // Minutes since 2026-01-01: always higher than the 0 used on the first invite and than any earlier update.
+  const sequence = Math.max(1, Math.floor((Date.now() - Date.UTC(2026, 0, 1)) / 60_000));
+  for (const person of audience) {
+    await sendCalendarInviteEmail({
+      to: person.email,
+      name: person.name,
+      fromName: originator,
+      subject: title ? `${title} - ${originator}` : originator,
+      details: meetingDetails(visit),
+      start: visit.expectedArrival,
+      end: meetingWhen(visit),
+      location: visit.meetingRoom,
+      uid: `${visit.id}@guest.neweast.co`,
+      sequence,
+    });
+  }
+  await addTimeline({
+    visitId,
+    event: "Calendar invitation updated",
+    note: `${visit.meetingRoom} · ${audience.map((person) => person.email).join(", ")}`,
+  });
+  return { sent: audience.length };
+}
+
+async function deliverRoomConfirm(visitId: string, options?: { ignoreTour?: boolean }) {
+  const visit = await prisma.visit.findUnique({
+    where: { id: visitId },
+    include: { visitors: { include: { visitor: true } }, createdBy: { select: { id: true, email: true, name: true } } },
+  });
+  if (!visit || visit.calendarInvitedAt || !visit.meetingRoom || (!options?.ignoreTour && visitBlocksConfirm(visit))) {
     return { sent: false as const, recipients: [] as { email: string; name: string }[] };
   }
   const recipients = await invitationPeople(visit);
@@ -1081,19 +1173,31 @@ async function deliverRoomConfirm(visitId: string) {
   );
   const audience = recipients.filter((person) => !guestEmails.has(person.email));
   if (!audience.length) return { sent: false as const, recipients: [] };
+  // Claim the send before mailing. Inbox sync runs from every open browser and the rooms pages at once;
+  // without this claim each concurrent run mailed the whole audience again.
+  const claimed = await prisma.visit.updateMany({
+    where: { id: visitId, calendarInvitedAt: null },
+    data: { calendarInvitedAt: new Date() },
+  });
+  if (claimed.count === 0) return { sent: false as const, recipients: [] as { email: string; name: string }[] };
   const uid = `${visit.id}@guest.neweast.co`;
-  for (const person of audience) {
-    await sendCalendarInviteEmail({
-      to: person.email,
-      name: person.name,
-      fromName: originator,
-      subject,
-      details,
-      start: visit.expectedArrival,
-      end,
-      location: visit.meetingRoom || "Meeting room",
-      uid,
-    });
+  try {
+    for (const person of audience) {
+      await sendCalendarInviteEmail({
+        to: person.email,
+        name: person.name,
+        fromName: originator,
+        subject,
+        details,
+        start: visit.expectedArrival,
+        end,
+        location: visit.meetingRoom || "Meeting room",
+        uid,
+      });
+    }
+  } catch (error) {
+    await prisma.visit.update({ where: { id: visitId }, data: { calendarInvitedAt: null } });
+    throw error;
   }
   await prisma.visit.update({
     where: { id: visitId },
@@ -1123,11 +1227,12 @@ async function deliverRoomConfirm(visitId: string) {
     onBehalfOf: visit.createdBy.name,
   }).catch(() => undefined);
   await briefVisitStakeholders(visitId).catch(() => undefined);
+  await maybeSendVisitDigest(visitId).catch(() => undefined);
   return { sent: true as const, recipients: audience };
 }
 
-export async function sendRoomConfirmReply(visitId: string) {
-  return deliverRoomConfirm(visitId);
+export async function sendRoomConfirmReply(visitId: string, options?: { ignoreTour?: boolean }) {
+  return deliverRoomConfirm(visitId, options);
 }
 
 export async function calendarInvitePlan(from: Date) {
@@ -1203,6 +1308,8 @@ export async function releaseVisitConfirmations(visitId: string) {
 }
 
 export async function flushRoomConfirmReplies(heads: InboxHead[] = []) {
+  // Private visit history to the owner for visits that became ready through any path.
+  await sendReadyVisitDigests().catch(() => undefined);
   if (!graphConfigured()) return;
   const accepted = heads.filter((head) => roomMailStatus(head.subject) === "accepted");
   for (const head of accepted) {

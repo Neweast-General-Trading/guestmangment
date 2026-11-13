@@ -1,3 +1,4 @@
+import { requestNow } from "@/lib/visit-order";
 import Link from "next/link";
 import { Inbox, MailOpen, ShieldAlert } from "lucide-react";
 import { importEmailAction, syncInboxAction } from "@/app/actions";
@@ -9,13 +10,18 @@ import { VisitStatus, TypeTag } from "@/components/status";
 import { Button, Card, PageHeader, TextInput, Textarea } from "@/components/ui";
 import { requireSession } from "@/lib/auth";
 import { guestRequestTemplate } from "@/lib/email-template";
-import { GUEST_KIND_LABEL, TERMINAL_STATUSES, type GuestKind } from "@/lib/constants";
-import { fmtDateTime } from "@/lib/format";
+import { GUEST_KIND_LABEL, type GuestKind } from "@/lib/constants";
+import { fmtDateTime, fmtTime } from "@/lib/format";
+import { endOfDay, startOfDay } from "date-fns";
+import { CalendarClock } from "lucide-react";
+import { DayGroupCard, DayHeader, WhenChip } from "@/components/day-header";
+import { groupByDay, isLive, relativeWhen, upcomingFirst, visitEnd, type DayGroup } from "@/lib/visit-order";
 import { peekInbox } from "@/lib/inbox-sync";
 import { isDummyMail, roomMailStatus, roomMailTitle, visitCodeFromSubject, type InboxHead } from "@/lib/graph";
 import { preparationLabel, preparationNote } from "@/lib/preparation";
 import { canManageIntake, mayCancelVisit, type SessionUser } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
+import { invitationTeamNames } from "@/lib/room-booking";
 import { visitInclude, type FullVisit } from "@/lib/visits";
 import { redirect } from "next/navigation";
 
@@ -39,7 +45,7 @@ export default async function IntakePage({
   const { error, tab: tabQuery } = await searchParams;
   const tab = tabQuery === "history" ? "history" : "current";
   const inbox = await peekInbox().catch(() => ({ requests: [] as InboxHead[], rooms: [] as InboxHead[] }));
-  const [queued, ingested, repliedRows] = await Promise.all([
+  const [queued, ingested, repliedRows, directory] = await Promise.all([
     prisma.visit.findMany({
       where: { source: { in: ["EMAIL", "STAFF"] }, visitCode: { notIn: HIDDEN_CODES } },
       include: visitInclude,
@@ -53,12 +59,17 @@ export default async function IntakePage({
       where: { roomConfirmRepliedAt: { not: null } },
       select: { visitCode: true },
     }),
+    prisma.user.findMany({ where: { isActive: true }, select: { email: true, name: true } }),
   ]);
+  const knownNames = new Map(directory.map((person) => [person.email.toLowerCase(), person.name]));
   const visits = queued.filter((item) => !isDummyMail(item.emailSubject || "", item.emailFrom || ""));
-  const now = Date.now();
-  const closed = new Set<string>(TERMINAL_STATUSES);
-  const upcoming = visits.filter((item) => item.expectedArrival.getTime() >= now && !closed.has(item.status));
-  const past = visits.filter((item) => item.expectedArrival.getTime() < now || closed.has(item.status));
+  const now = requestNow();
+  // Current: still ahead or under way, soonest first. History: over or closed, newest first.
+  const ordered = upcomingFirst(visits, now);
+  const upcoming = ordered.filter((item) => isLive(item, now));
+  const past = ordered.filter((item) => !isLive(item, now));
+  const todayEnd = endOfDay(new Date(now)).getTime();
+  const todayLeft = upcoming.filter((item) => item.expectedArrival.getTime() <= todayEnd).length;
   const taken = new Set(ingested.map((item) => item.emailMessageId).filter(Boolean));
   const repliedCodes = new Set(repliedRows.map((item) => item.visitCode));
   const otherRequests = inbox.requests
@@ -102,7 +113,8 @@ export default async function IntakePage({
       ) : null}
       <InboxAutoSync />
 
-      <div className="mb-5 grid gap-3 sm:grid-cols-3">
+      <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Stat icon={CalendarClock} label="Still today" value={todayLeft} />
         <Stat icon={Inbox} label="Preparing" value={counts.intake} />
         <Stat icon={ShieldAlert} label="Building tours" value={counts.escalated} />
         <Stat icon={MailOpen} label="Room replies" value={counts.rooms} />
@@ -135,7 +147,9 @@ export default async function IntakePage({
             })}
           </div>
           <p className="mt-3 text-[12px] text-[var(--muted)]">
-            {tab === "history" ? "Meetings that have passed or were cancelled. Newest first." : "From now on. Newest appointment first. New mail stays at the top."}
+            {tab === "history"
+              ? "Meetings that are over or were cancelled. Newest first, one block per day."
+              : "Happening now first, then today, then the days ahead in time order. New mail stays at the top."}
           </p>
           <div className="mt-3 space-y-3">
             {tab === "history" ? (
@@ -144,7 +158,9 @@ export default async function IntakePage({
                   <p className="text-sm font-medium">No past or cancelled meetings.</p>
                 </Card>
               ) : (
-                past.map((visit) => <VisitRequestCard key={visit.id} visit={visit} session={session} returnTo="/intake?tab=history" />)
+                groupByDay(past, now).map((group) => (
+                  <DaySection key={group.key} group={group} now={now} session={session} returnTo="/intake?tab=history" knownNames={knownNames} />
+                ))
               )
             ) : upcoming.length + otherRequests.length === 0 ? (
               <Card>
@@ -155,18 +171,30 @@ export default async function IntakePage({
               </Card>
             ) : (
               <>
-                {otherRequests.map((item) => (
-                  <InboxMailCard
-                    key={item.id}
-                    id={item.id}
-                    subject={item.subject}
-                    from={item.from}
-                    fromName={item.fromName}
-                    receivedAt={item.receivedAt ? fmtDateTime(item.receivedAt) : ""}
-                  />
-                ))}
-                {upcoming.map((visit) => (
-                  <VisitRequestCard key={visit.id} visit={visit} session={session} returnTo="/intake" />
+                {otherRequests.length ? (
+                  // Folded unless something arrived today, so old mail never pushes today's visits down.
+                  <details className="group space-y-3" open={otherRequests.some((item) => Date.parse(item.receivedAt) >= startOfDay(new Date(now)).getTime())}>
+                    <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+                      <DayHeader
+                        group={{ label: "New emails", hint: "Not turned into a visit yet · click to show or hide", tone: "today", count: otherRequests.length }}
+                      />
+                    </summary>
+                    <div className="mt-3 space-y-3">
+                    {otherRequests.map((item) => (
+                      <InboxMailCard
+                        key={item.id}
+                        id={item.id}
+                        subject={item.subject}
+                        from={item.from}
+                        fromName={item.fromName}
+                        receivedAt={item.receivedAt ? fmtDateTime(item.receivedAt) : ""}
+                      />
+                    ))}
+                    </div>
+                  </details>
+                ) : null}
+                {groupByDay(upcoming, now).map((group) => (
+                  <DaySection key={group.key} group={group} now={now} session={session} returnTo="/intake" knownNames={knownNames} />
                 ))}
               </>
             )}
@@ -255,20 +283,85 @@ function Stat({
   );
 }
 
+function invitationTeam(visit: FullVisit, knownNames: Map<string, string>) {
+  return invitationTeamNames(visit.colleagueInvitees, knownNames).map((person) => person.name);
+}
+
+function DaySection({
+  group,
+  now,
+  session,
+  returnTo,
+  knownNames,
+}: {
+  group: DayGroup<FullVisit>;
+  now: number;
+  session: SessionUser;
+  returnTo: string;
+  knownNames: Map<string, string>;
+}) {
+  return (
+    <DayGroupCard
+      group={{ label: group.label, hint: group.hint, tone: group.tone, count: group.items.length }}
+      preview={group.items.map((visit) => ({
+        id: visit.id,
+        time: fmtTime(visit.expectedArrival),
+        title: (visit.visitTitle || visit.purpose || "Guest visit").trim(),
+        room: visit.meetingRoom || "No room",
+        now: relativeWhen(visit, now) === "Now",
+      }))}
+    >
+      {group.items.map((visit) => (
+        <VisitRequestCard
+          key={visit.id}
+          visit={visit}
+          session={session}
+          returnTo={returnTo}
+          knownNames={knownNames}
+          when={relativeWhen(visit, now)}
+          tone={group.tone}
+        />
+      ))}
+    </DayGroupCard>
+  );
+}
+
+const CARD_TONE: Record<DayGroup<unknown>["tone"], string> = {
+  now: "border-[var(--brand)] bg-white shadow-[0_0_0_3px_var(--brand-soft)]",
+  today: "border-[var(--line-strong)] bg-white",
+  ahead: "border-[var(--line)] bg-[#fcfafa]",
+  past: "border-[var(--line)] bg-[#faf9f9] opacity-85",
+};
+
 function VisitRequestCard({
   visit,
   session,
   returnTo,
+  knownNames,
+  when,
+  tone,
 }: {
   visit: FullVisit;
   session: SessionUser;
   returnTo: string;
+  knownNames: Map<string, string>;
+  when: string;
+  tone: DayGroup<unknown>["tone"];
 }) {
   const guest = visit.visitors[0]?.visitor;
   const kind = (visit.guestKind || "GUEST") as GuestKind;
+  const team = invitationTeam(visit, knownNames);
   return (
-    <div className="rounded-xl border border-[var(--line)] bg-[#fcfafa] p-4 hover:border-[var(--line-strong)] hover:bg-white">
-      <Link href={`/intake/${visit.id}`} className="block">
+    <div className={`rounded-xl border p-4 hover:border-[var(--line-strong)] hover:bg-white ${CARD_TONE[tone]}`}>
+      <Link href={`/intake/${visit.id}`} className="flex gap-4">
+        <div className="flex w-[68px] shrink-0 flex-col items-start border-r border-[var(--line)] pr-3">
+          <span className="text-[18px] font-semibold leading-none tabular-nums text-[var(--ink)]">{fmtTime(visit.expectedArrival)}</span>
+          <span className="mt-1 text-[11px] text-[var(--muted)] tabular-nums">to {fmtTime(visitEnd(visit))}</span>
+          <span className="mt-2">
+            <WhenChip label={when} tone={tone} />
+          </span>
+        </div>
+        <div className="min-w-0 flex-1">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-[15px] font-medium leading-snug text-[var(--ink)]">
@@ -276,7 +369,6 @@ function VisitRequestCard({
             </div>
             <div className="mt-1 text-[13px] text-[var(--muted)]">
               {[visit.meetingRoom || "Room not set", preparationNote(visit)].filter(Boolean).join(" · ")}
-              <span className="text-[var(--faint)]"> · {fmtDateTime(visit.expectedArrival)}</span>
             </div>
           </div>
           <div className="flex shrink-0 flex-wrap justify-end gap-1">
@@ -295,7 +387,13 @@ function VisitRequestCard({
           </div>
           <div className="shrink-0 text-right text-[11px] text-[var(--faint)]">{visit.visitCode}</div>
         </div>
+        {team.length ? (
+          <div className="mt-2 text-[12px] leading-5 text-[var(--muted)]">
+            <span className="font-medium text-[var(--ink)]">Invitation team:</span> {team.join(", ")}
+          </div>
+        ) : null}
         {visit.roomConfirmRepliedAt ? <div className="mt-2 text-[12px] font-medium text-[#2f7d6d]">Notes · Reply done</div> : null}
+        </div>
       </Link>
       {mayCancelVisit(session, visit) ? (
         <div className="mt-3 border-t border-[var(--line)] pt-3">

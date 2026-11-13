@@ -12,7 +12,7 @@ import { GUEST_KIND_LABEL, type GuestKind } from "@/lib/constants";
 import { fmtDateTime, fmtTime } from "@/lib/format";
 import { canManageIntake, canSeeAllVisits, canSeePasses, isGatePassApprover, mayCancelVisit } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
-import { listRoomInvitePeople, parseStoredInvitees } from "@/lib/room-booking";
+import { invitationTeamNames, listRoomInvitePeople, parseStoredInvitees } from "@/lib/room-booking";
 import { guestDocHref, parseGuestDocs } from "@/lib/guest-doc-types";
 import { preparationNote } from "@/lib/preparation";
 import { canEditStaffRequest } from "@/lib/staff-request";
@@ -23,12 +23,12 @@ export default async function StaffRequestDetailPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ error?: string; saved?: string }>;
+  searchParams: Promise<{ error?: string; saved?: string; files?: string }>;
 }) {
   const session = await requireSession();
   if (!session) return null;
   const { id } = await params;
-  const { error, saved } = await searchParams;
+  const { error, saved, files } = await searchParams;
   const visit = await prisma.visit.findUnique({
     where: { id },
     include: {
@@ -48,7 +48,7 @@ export default async function StaffRequestDetailPage({
 
   const kind = (visit.guestKind || "GUEST") as GuestKind;
   const canEdit = canEditStaffRequest(session, visit);
-  const seeDocs = isGatePassApprover(session) || visit.createdById === session.id;
+  const seeDocs = isGatePassApprover(session) || canSeePasses(session) || visit.createdById === session.id;
   const [departments, people] = canEdit
     ? await Promise.all([
         prisma.department.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
@@ -100,6 +100,8 @@ export default async function StaffRequestDetailPage({
       }
     : null;
   const docs = parseGuestDocs(visit.attachmentsJson);
+  const directory = await prisma.user.findMany({ where: { isActive: true }, select: { email: true, name: true } });
+  const team = invitationTeamNames(visit.colleagueInvitees, new Map(directory.map((person) => [person.email.toLowerCase(), person.name])));
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -124,6 +126,11 @@ export default async function StaffRequestDetailPage({
       ) : null}
       {saved ? (
         <p className="mb-4 rounded-md border border-[#d7e6da] bg-[var(--tint-sage)] px-3 py-2 text-[13px]">Changes saved.</p>
+      ) : null}
+      {files ? (
+        <p className="mb-4 rounded-md border border-[#ead8d8] bg-[var(--tint-peach)] px-3 py-2 text-[13px] text-[var(--brand-ink)]">
+          {files}
+        </p>
       ) : null}
 
       {visit.createdById === session.id || canSeePasses(session) || canManageIntake(session.role) ? (
@@ -180,12 +187,16 @@ export default async function StaffRequestDetailPage({
         </Card>
       </div>
 
-      {parseStoredInvitees(visit.colleagueInvitees).length ? (
+      {team.length ? (
         <Card className="mb-4">
-          <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--faint)]">NEWEAST invitees</div>
-          <p className="mt-1 text-[13px]">
-            {parseStoredInvitees(visit.colleagueInvitees).map((person) => person.name).join(", ")}
-          </p>
+          <h2 className="text-sm font-semibold">Invitation team</h2>
+          <ul className="mt-3 space-y-1">
+            {team.map((person) => (
+              <li key={person.email} className="text-[13px] text-[var(--ink)]">
+                {person.name}
+              </li>
+            ))}
+          </ul>
         </Card>
       ) : null}
 

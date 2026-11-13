@@ -47,7 +47,8 @@ async function main() {
   await prisma.user.deleteMany();
   await prisma.department.deleteMany();
 
-  const passwordHash = await bcrypt.hash("", 10);
+  const seedPassword = process.env.SEED_PASSWORD?.trim() || randomBytes(24).toString("hex");
+  const passwordHash = await bcrypt.hash(seedPassword, 10);
 
   const departments = await Promise.all(
     [

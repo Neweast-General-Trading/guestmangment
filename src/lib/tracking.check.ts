@@ -4,6 +4,7 @@ import { navFor } from "./permissions";
 import { inTrackingRange, mergeTrackingRooms, trackingHref, trackingSourceLabel, trackingTab } from "./tracking";
 
 assert.equal(canSeeTracking("sakour@neweast.co"), true);
+assert.equal(canSeeTracking("ashwin@neweast.co"), true);
 assert.equal(canSeeTracking("salma.moufallah@neweast.com"), true);
 assert.equal(canSeeTracking("salma.moufallah@neweast.co"), true);
 assert.equal(canSeeTracking("guru@neweast.co"), false);

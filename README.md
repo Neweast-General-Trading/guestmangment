@@ -241,7 +241,7 @@ npm run dev
 
 Open [http://localhost:3088](http://localhost:3088).
 
-The seed password for local demo accounts is ``.
+Local demo accounts take their password from `SEED_PASSWORD` in `.env`. Leave it empty and the seed generates a random one. Do not put a mailbox password in git.
 
 | Email | Local demo role |
 | --- | --- |

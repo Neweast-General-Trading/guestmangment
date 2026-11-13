@@ -208,7 +208,7 @@ async function seedDemo() {
   const ops = await prisma.department.findFirst({ where: { name: { contains: "Operations" } } });
   const any = await prisma.user.findFirst({ where: { isActive: true, departmentId: { not: null } }, select: { departmentId: true } });
   const departmentId = ops?.id || any?.departmentId || null;
-  const hash = bcrypt.hashSync("", 10);
+  const hash = bcrypt.hashSync(crypto.randomBytes(24).toString("hex"), 10);
   const people = [
     { email: OPS, name: "Operations", role: "EMPLOYEE", jobTitle: "Operations", accessGroup: "BUSINESS_IT", managerName: "Line manager" },
     { email: MANAGER, name: "Line manager", role: "DEPARTMENT_MANAGER", jobTitle: "Line manager", accessGroup: "BUSINESS_IT", managerName: null },

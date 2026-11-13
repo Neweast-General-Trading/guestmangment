@@ -263,7 +263,7 @@ export async function ensureHqLogins() {
     await prisma.user.create({
       data: {
         email: "security@neweast.co",
-        passwordHash: await hashPassword(""),
+        passwordHash: await hashPassword(randomBytes(24).toString("hex")),
         name: "Security Desk",
         role: "SECURITY_GUARD",
         isActive: true,
@@ -304,6 +304,14 @@ export async function ensureHqLogins() {
   if (guru) {
     await prisma.user.update({
       where: { id: guru.id },
+      data: { role: "SYSTEM_ADMIN", isActive: true, accessGroup: "IT" },
+    });
+  }
+
+  const ashwin = await prisma.user.findUnique({ where: { email: "ashwin@neweast.co" } });
+  if (ashwin) {
+    await prisma.user.update({
+      where: { id: ashwin.id },
       data: { role: "SYSTEM_ADMIN", isActive: true, accessGroup: "IT" },
     });
   }

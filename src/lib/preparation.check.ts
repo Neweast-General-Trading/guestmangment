@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { preparationLabel, preparationNote } from "./preparation";
+import { pendingBecause, preparationLabel, preparationNote } from "./preparation";
 
 const waiting = {
   status: "INTAKE",
@@ -30,6 +30,28 @@ assert.equal(
 assert.equal(
   preparationNote({ ...waiting, gatePassStatus: "DONE", giftStatus: "DONE", visitors: [{ gatePassRequired: true, gatePassStatus: "DONE", giftRequired: true, giftStatus: "DONE" }] }),
   "",
+);
+
+assert.equal(
+  pendingBecause({ ...waiting, meetingRoom: "" }, "unbooked"),
+  "Pending because no meeting room was chosen, the gate pass is not uploaded, and the gift is not ready. Waiting on Reception, Muna, and Jesman.",
+);
+assert.equal(
+  pendingBecause({ ...waiting, meetingRoom: "Dubai" }, "unbooked"),
+  "Pending because Dubai is not booked yet, the gate pass is not uploaded, and the gift is not ready. Waiting on Reception, Muna, and Jesman.",
+);
+assert.equal(
+  pendingBecause(
+    {
+      ...waiting,
+      meetingRoom: "Shanghai",
+      gatePassRequired: false,
+      giftRequired: false,
+      visitors: [],
+    },
+    "awaiting-accept",
+  ),
+  "Pending because Shanghai has not accepted. Waiting on Shanghai.",
 );
 
 console.log("preparation.check: ok");

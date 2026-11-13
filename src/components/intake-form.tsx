@@ -31,10 +31,11 @@ export type IntakeFormVisit = {
   driverName: string;
   driverMobile: string;
   driverVehicle: string;
-  visitors: (ParsedVisitor & { docs?: { type: GuestDocType; name: string; href: string }[] })[];
+  visitors: (ParsedVisitor & { linkId?: string; docs?: { type: GuestDocType; name: string; href: string }[] })[];
   tourType?: string | null;
   locked: boolean;
   confirmed: boolean;
+  showConfirm?: boolean;
   docs?: { type: GuestDocType; name: string; href: string }[];
 };
 
@@ -121,6 +122,7 @@ export function IntakeForm({
         <div className="mt-4 space-y-4">
           {visitors.map((visitor, index) => (
             <div key={index} className="rounded-xl border border-[var(--line)] bg-[#fcfafa] p-4">
+              <input type="hidden" name={`visitor_${index}_linkId`} value={visitor.linkId || ""} />
               <div className="mb-3 text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--faint)]">
                 Visitor {index + 1}
               </div>
@@ -167,11 +169,13 @@ export function IntakeForm({
           <p className="mt-1 text-[12px] text-[var(--muted)]">
             {visit.confirmed
               ? "This meeting is already confirmed. Save keeps edits. Submit sends the visit to the security desk."
-              : "Confirm sets the room and driver. Submit sends the visit to the security desk. Building Tour waits for Salma Moufallah."}
+              : visit.showConfirm
+                ? "Confirm sets the room and driver. Submit sends the visit to the security desk. Building Tour waits for Salma Moufallah."
+                : "Save keeps edits. Submit sends the visit to the security desk when preparation is ready."}
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
             <IntakeAction label="Save" working="Saving…" variant="secondary" formAction={saveIntakeAction} />
-            {visit.confirmed ? null : <IntakeAction label="Confirm" working="Confirming…" formAction={confirmIntakeAction} />}
+            {visit.showConfirm ? <IntakeAction label="Confirm" working="Confirming…" formAction={confirmIntakeAction} /> : null}
             <IntakeAction label="Submit to Security" working="Submitting…" formAction={submitIntakeAction} />
           </div>
         </section>

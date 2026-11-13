@@ -4,6 +4,7 @@ import { visitInclude, visitWhereFor } from "./visits";
 import type { SessionUser } from "./permissions";
 import { Prisma } from "@prisma/client";
 import { listActiveServices } from "./service-master";
+import { TERMINAL_STATUSES } from "./constants";
 
 export async function searchVisits(user: SessionUser, params: {
   q?: string;
@@ -14,8 +15,14 @@ export async function searchVisits(user: SessionUser, params: {
   to?: string;
   hostId?: string;
   take?: number;
+  order?: "upcoming" | "newest";
+  /** "history": only visits that are over or closed. */
+  scope?: "all" | "history";
 }) {
   const AND: Prisma.VisitWhereInput[] = [visitWhereFor(user)];
+  if (params.scope === "history") {
+    AND.push({ OR: [{ status: { in: [...TERMINAL_STATUSES] } }, { expectedArrival: { lt: startOfDay(new Date()) } }] });
+  }
   if (params.status) AND.push({ status: params.status });
   if (params.type) AND.push({ type: params.type });
   if (params.departmentId) AND.push({ departmentId: params.departmentId });
@@ -44,12 +51,33 @@ export async function searchVisits(user: SessionUser, params: {
     });
   }
 
-  return prisma.visit.findMany({
-    where: { AND },
+  const take = params.take ?? 80;
+  if (params.order === "newest") {
+    return prisma.visit.findMany({
+      where: { AND },
+      include: visitInclude,
+      orderBy: [{ expectedArrival: "desc" }],
+      take,
+    });
+  }
+  // Default: today and what is coming next first (soonest on top), then the past (newest first).
+  const todayStart = startOfDay(new Date());
+  const ahead = await prisma.visit.findMany({
+    where: { AND: [...AND, { expectedArrival: { gte: todayStart } }] },
     include: visitInclude,
-    orderBy: [{ visitDate: "desc" }, { expectedArrival: "asc" }],
-    take: params.take ?? 80,
+    orderBy: [{ expectedArrival: "asc" }],
+    take,
   });
+  const before =
+    ahead.length >= take
+      ? []
+      : await prisma.visit.findMany({
+          where: { AND: [...AND, { expectedArrival: { lt: todayStart } }] },
+          include: visitInclude,
+          orderBy: [{ expectedArrival: "desc" }],
+          take: take - ahead.length,
+        });
+  return [...ahead, ...before];
 }
 
 export async function dashboardStats(user: SessionUser, now = new Date()) {

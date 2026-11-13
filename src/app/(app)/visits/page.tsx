@@ -1,3 +1,4 @@
+import { requestNow } from "@/lib/visit-order";
 import { Plus } from "lucide-react";
 import { Button, PageHeader } from "@/components/ui";
 import { VisitFilters } from "@/components/filters";
@@ -47,7 +48,7 @@ export default async function VisitsPage({
         </p>
       ) : null}
       <VisitFilters departments={departments} defaults={params} />
-      <VisitTable visits={visits.map((visit) => ({ ...visit, canCancel: mayCancelVisit(session, visit) }))} />
+      <VisitTable now={requestNow()} visits={visits.map((visit) => ({ ...visit, canCancel: mayCancelVisit(session, visit) }))} />
     </div>
   );
 }

@@ -25,6 +25,7 @@ const TONE: Record<string, string> = {
   NO_SHOW: "bg-[#f8f1de] text-[#9a6b12]",
   EXPIRED: "bg-[#f1f2f4] text-[#5f6672]",
   ACCESS_DENIED: "bg-[#fdecea] text-[#b42318]",
+  PASSED: "bg-[#eef1f5] text-[#4a5568]",
   PENDING: "bg-[#f8f1de] text-[#9a6b12]",
   WAITING: "bg-[#f1f2f4] text-[#5f6672]",
   INFO_REQUESTED: "bg-[#f8f1de] text-[#9a6b12]",

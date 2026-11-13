@@ -12,8 +12,9 @@ import type { ParsedGuestRequest } from "./email-template";
 import { GUEST_KIND_LABEL, type GuestKind, type TourType } from "./constants";
 import { canManageIntake, canDecideEscalation, type SessionUser } from "./permissions";
 import { sendRoomConfirmReply, syncOutlookRoom } from "./room-booking";
-import { isDeskSource } from "./staff-request";
+import { claimPreviousLink, isDeskSource } from "./staff-request";
 import { applyTourType, syncSupplierApproval, visitBlocksConfirm } from "./tours";
+import { maybeSendVisitDigest } from "./visit-digest";
 
 const HIDDEN_HOST = "olga@neweast.co";
 const ADMIN_EMAIL = "adminsatror@neweast.co";
@@ -204,6 +205,7 @@ export async function updateIntakeVisit(
     driverMobile?: string;
     driverVehicle?: string;
     visitors: {
+      linkId?: string;
       fullName: string;
       mobile: string;
       email?: string;
@@ -238,7 +240,7 @@ export async function updateIntakeVisit(
     ),
   );
   const previous = await prisma.visitVisitor.findMany({ where: { visitId } });
-  const previousByVisitor = new Map(previous.map((link) => [link.visitorId, link]));
+  const kept = new Set<string>();
   await prisma.visitVisitor.deleteMany({ where: { visitId } });
   await prisma.visit.update({
     where: { id: visitId },
@@ -261,8 +263,9 @@ export async function updateIntakeVisit(
       visitorCount: visitors.length,
       visitors: {
         create: visitors.map((visitor, index) => {
-          const old = previousByVisitor.get(visitor.id);
+          const old = claimPreviousLink(previous, kept, input.visitors[index]?.linkId, visitor.id);
           return {
+            ...(old ? { id: old.id } : {}),
             visitorId: visitor.id,
             isPrimary: index === 0,
             sortOrder: index,
@@ -442,4 +445,5 @@ export async function submitIntake(actor: SessionUser, visitId: string) {
     title: "Visit ready at the desk",
     message: `${visit.visitCode} is expected and ready for check-in.`,
   });
+  await maybeSendVisitDigest(visitId).catch(() => undefined);
 }

@@ -1,3 +1,5 @@
+import { requestNow } from "@/lib/visit-order";
+import { upcomingFirst } from "@/lib/visit-order";
 import { PageHeader } from "@/components/ui";
 import { VisitForm } from "@/components/visit-form";
 import { VisitTable } from "@/components/visit-table";
@@ -31,7 +33,7 @@ export default async function WalkInPage() {
         </div>
       ) : null}
       <h2 className="mb-3 text-sm font-medium">Walk-in history</h2>
-      <VisitTable visits={visits} empty="No walk-in visits yet." />
+      <VisitTable visits={upcomingFirst(visits, requestNow())} now={requestNow()} empty="No walk-in visits yet." />
     </div>
   );
 }

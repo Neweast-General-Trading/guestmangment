@@ -71,6 +71,7 @@ export const VISIT_STATUSES = [
   "NO_SHOW",
   "EXPIRED",
   "ACCESS_DENIED",
+  "PASSED",
 ] as const;
 
 export type VisitStatus = (typeof VISIT_STATUSES)[number];
@@ -98,6 +99,7 @@ export const STATUS_LABEL: Record<VisitStatus, string> = {
   NO_SHOW: "No show",
   EXPIRED: "Expired",
   ACCESS_DENIED: "Access denied",
+  PASSED: "Passed",
 };
 
 export const VISITOR_CATEGORIES = [
@@ -184,6 +186,7 @@ export const OPEN_STATUSES: VisitStatus[] = [
 ];
 
 export const TERMINAL_STATUSES: VisitStatus[] = [
+  "PASSED",
   "CHECKED_OUT",
   "COMPLETED",
   "REJECTED",
@@ -234,6 +237,7 @@ export const SAMIR_EMAILS = ["samir.ibrahim@neweast.co", "samir.ibrahim@neweast.
 export const SALMA_EMAILS = ["salma.moufallah@neweast.com", "salma.moufallah@neweast.co"] as const;
 export const HANNA_EMAILS = ["hannah@neweast.co", "hannah@neweast.com"] as const;
 export const JESMAN_EMAILS = ["jesman@neweast.co", "jesman@neweast.com"] as const;
+export const SAWSAN_EMAILS = ["sawsan@neweast.co"] as const;
 
 export function isSalmaEmail(email?: string | null) {
   const value = (email || "").trim().toLowerCase();
@@ -247,7 +251,6 @@ export function isSamirEmail(email?: string | null) {
 
 export const HQ_NAME = "NEWEAST Headquarters";
 export const APP_NAME = "Guest Management";
-export const DEFAULT_PASSWORD = "";
 
 export const APPROVER_PRESETS = [
   { code: "HOST_MANAGER", label: "Line Manager", role: "DEPARTMENT_MANAGER" },

@@ -5,8 +5,8 @@ import { createPortal } from "react-dom";
 import { cancelGuestAction, submitStaffRequestAction, updateStaffRequestAction } from "@/app/actions";
 import { FormBusy } from "@/components/form-busy";
 import { SearchSelect, type SearchOption } from "@/components/search-select";
-import { GIFT_TYPES } from "@/lib/arrangement-types";
 import { InvitePeople } from "@/components/invite-people";
+import { VisitEssentials } from "@/components/visit-essentials";
 import { RoomSelect } from "@/components/room-select";
 import { TourField } from "@/components/tour-field";
 import { GuestDocFields } from "@/components/guest-doc-fields";
@@ -103,9 +103,6 @@ export function StaffRequestForm({
               company: fieldValue(form, `company_${rowIndex}`, row.company),
               jobTitle: fieldValue(form, `jobTitle_${rowIndex}`, row.jobTitle),
               nationality: fieldValue(form, `nationality_${rowIndex}`, row.nationality),
-              gatePassRequired: fieldValue(form, `gatePass_${rowIndex}`, row.gatePassRequired ? "yes" : "no") === "yes",
-              giftRequired: fieldValue(form, `gift_${rowIndex}`, row.giftRequired ? "yes" : "no") === "yes",
-              giftType: fieldValue(form, `giftType_${rowIndex}`, row.giftType),
             }
           : row,
       );
@@ -168,6 +165,12 @@ export function StaffRequestForm({
         </select>
       </Field>
 
+      <VisitEssentials
+        gatePass={Boolean(edit?.guests.some((guest) => guest.gatePassRequired))}
+        gift={Boolean(edit?.guests.some((guest) => guest.giftRequired))}
+        giftType={edit?.guests.find((guest) => guest.giftType)?.giftType || "Welcome gift"}
+      />
+
       <div className="space-y-3">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <h2 className="text-sm font-semibold">Guests</h2>
@@ -197,6 +200,7 @@ export function StaffRequestForm({
                 />
               ) : null}
             </div>
+            <input type="hidden" name={`linkId_${index}`} value={row.linkId} />
             <div className="grid gap-2 sm:grid-cols-2">
               <Field label="Full name" required>
                 <TextInput name={`fullName_${index}`} placeholder="Full name" required defaultValue={row.fullName} />
@@ -211,7 +215,6 @@ export function StaffRequestForm({
               <TextInput name={`jobTitle_${index}`} placeholder="Job title" defaultValue={row.jobTitle} />
               <TextInput name={`nationality_${index}`} placeholder="Nationality" defaultValue={row.nationality} />
             </div>
-            <GuestChoices index={index} gatePassRequired={row.gatePassRequired} giftRequired={row.giftRequired} giftType={row.giftType} />
             <div className="mt-3">
               <GuestDocFields index={index} guestName={row.fullName || `Guest ${index + 1}`} docs={row.docs} />
             </div>
@@ -224,60 +227,11 @@ export function StaffRequestForm({
         bookerEmail={bookerEmail}
         initial={edit?.invitees || []}
         cancelVisitId={edit?.id}
-        hint="NEWEAST and AISIN colleagues to invite. When Reception confirms the booking, they receive a guest visit invitation they can accept. Guests are not included."
+        hint="NEWEAST and AISIN colleagues to invite. When the meeting room accepts, they receive the invitation. Guests are not included."
       />
 
       <Button type="submit">{edit ? "Save changes" : "Submit request"}</Button>
     </form>
-  );
-}
-
-function GuestChoices({
-  index,
-  gatePassRequired,
-  giftRequired,
-  giftType,
-}: {
-  index: number;
-  gatePassRequired: boolean;
-  giftRequired: boolean;
-  giftType: string;
-}) {
-  const known = GIFT_TYPES.includes(giftType as (typeof GIFT_TYPES)[number]);
-  const [pass, setPass] = useState(gatePassRequired ? "yes" : "no");
-  const [gift, setGift] = useState(giftRequired ? "yes" : "no");
-  const [type, setType] = useState<(typeof GIFT_TYPES)[number]>(known ? (giftType as (typeof GIFT_TYPES)[number]) : "Other");
-  return (
-    <div className="mt-3 grid gap-2 sm:grid-cols-2">
-      <Field label="Gate pass">
-        <select name={`gatePass_${index}`} className={inputClass} value={pass} onChange={(event) => setPass(event.target.value)}>
-          <option value="no">No</option>
-          <option value="yes">Yes</option>
-        </select>
-      </Field>
-      <Field label="Protocol gift">
-        <select name={`gift_${index}`} className={inputClass} value={gift} onChange={(event) => setGift(event.target.value)}>
-          <option value="no">No</option>
-          <option value="yes">Yes</option>
-        </select>
-      </Field>
-      {gift === "yes" ? (
-        <Field label="Gift type" required>
-          <select name={`giftType_${index}`} className={inputClass} value={type} onChange={(event) => setType(event.target.value as (typeof GIFT_TYPES)[number])} required>
-            {GIFT_TYPES.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </select>
-        </Field>
-      ) : null}
-      {gift === "yes" && type === "Other" ? (
-        <Field label="Describe the gift" required>
-          <TextInput name={`giftTypeOther_${index}`} required defaultValue={known ? "" : giftType} placeholder="What should we prepare?" />
-        </Field>
-      ) : null}
-    </div>
   );
 }
 

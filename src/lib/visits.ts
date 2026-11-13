@@ -7,7 +7,14 @@ import { startApprovals } from "./approvals";
 import { makeQrToken, nextBadgeNumber, nextVisitCode } from "./ids";
 import { sendVisitInvitationEmail } from "./mail";
 import { isParkingSlot, remapLegacyParkingSlot } from "./parking";
-import { canAssignParking, canOperateGate, canSeeAllVisits, canSeeIdentity, isInside, mayCancelVisit, type SessionUser } from "./permissions";
+import { canAssignParking, canManageIntake, canOperateGate, canSeeAllVisits, canSeeIdentity, isInside, mayCancelVisit, type SessionUser } from "./permissions";
+
+/** Gate actions (verify, arrive, check-in/out, in meeting) belong to Security and Reception only. */
+function assertGateDesk(actor: SessionUser) {
+  if (!canOperateGate(actor.role) && actor.role !== "HR_ADMIN") {
+    throw new Error("Only Security or Reception can do this.");
+  }
+}
 import { parseQrPayload } from "./qr";
 import { hospitalityData, type HospitalityInput } from "./hospitality";
 import { flagsFromNeeds, parseGuestNeeds } from "./guest-needs";
@@ -335,6 +342,9 @@ export async function updateVisit(actor: SessionUser, visitId: string, input: Vi
 
 export async function submitVisit(actor: SessionUser, visitId: string) {
   const visit = await prisma.visit.findUniqueOrThrow({ where: { id: visitId } });
+  if (!canManageIntake(actor.role) && actor.id !== visit.createdById && actor.id !== visit.hostId) {
+    throw new Error("Only the requester, the host or Reception can submit this visit.");
+  }
   if (visit.status !== "DRAFT") throw new Error("Only draft visits can be submitted.");
   await prisma.visit.update({ where: { id: visitId }, data: { status: "PENDING_APPROVAL" } });
   await startApprovals(visitId, actor.id);
@@ -391,6 +401,14 @@ export async function sendInvitation(actor: SessionUser, visitId: string, channe
   if (visit.status !== "APPROVED" && visit.status !== "INVITATION_SENT" && visit.status !== "EXPECTED") {
     throw new Error("Invitations can only be sent after approval.");
   }
+  const decidedHere = await prisma.approval.count({ where: { visitId, assigneeId: actor.id } });
+  const mayInvite =
+    canManageIntake(actor.role) ||
+    canOperateGate(actor.role) ||
+    actor.id === visit.hostId ||
+    actor.id === visit.createdById ||
+    decidedHere > 0;
+  if (!mayInvite) throw new Error("Only the host, an approver or Reception can send this invitation.");
 
   if (channel === "EMAIL") {
     const settings = await prisma.systemSetting.findMany();
@@ -534,6 +552,7 @@ export async function registerWalkIn(
 }
 
 export async function verifyVisitor(actor: SessionUser, visitId: string) {
+  assertGateDesk(actor);
   const visit = await prisma.visit.findUniqueOrThrow({
     where: { id: visitId },
     include: { visitors: { include: { visitor: true } } },
@@ -626,6 +645,7 @@ export async function checkIn(
     checkInAt?: string;
   },
 ) {
+  assertGateDesk(actor);
   const visit = await prisma.visit.findUniqueOrThrow({
     where: { id: visitId },
     include: { visitors: { include: { visitor: true } }, badges: true, vehicles: true },
@@ -687,6 +707,7 @@ export async function checkOut(
   visitId: string,
   input: { exitGate: string; badgeReturned?: boolean; notes?: string; checkOutAt?: string },
 ) {
+  assertGateDesk(actor);
   const visit = await prisma.visit.findUniqueOrThrow({
     where: { id: visitId },
     include: { badges: true },
@@ -732,11 +753,13 @@ export async function checkOut(
 }
 
 export async function markArrived(actor: SessionUser, visitId: string) {
+  assertGateDesk(actor);
   await prisma.visit.update({ where: { id: visitId }, data: { status: "ARRIVED" } });
   await addTimeline({ visitId, event: "Arrived", note: "Visitor reported at the gate.", userId: actor.id });
 }
 
 export async function markInMeeting(actor: SessionUser, visitId: string) {
+  assertGateDesk(actor);
   const visit = await prisma.visit.findUniqueOrThrow({ where: { id: visitId } });
   if (!isInside(visit.status)) throw new Error("Visitor is not inside.");
   await prisma.visit.update({ where: { id: visitId }, data: { status: "IN_MEETING" } });

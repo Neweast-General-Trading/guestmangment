@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { staffRoomHoldMailCopy } from "./mail";
-import { attachRoomHoldNotes, mergeRoomDayEvents, omitInvitee, parseRoomInvitees, parseStoredInvitees, staffRoomEventBody } from "./room-booking";
+import { attachRoomHoldNotes, invitationTeamNames, mergeRoomDayEvents, omitInvitee, parseRoomInvitees, parseStoredInvitees, staffRoomEventBody } from "./room-booking";
 
 assert.equal(
   staffRoomEventBody({ name: "Mais Ali", email: "mais@neweast.co", description: "Board meeting\nHDMI" }),
@@ -32,6 +32,10 @@ const stored = parseStoredInvitees(JSON.stringify([{ email: "Mais@neweast.co", n
 assert.equal(stored[0].email, "mais@neweast.co");
 assert.equal(stored[0].name, "Mais Ali");
 assert.equal(stored[1].email, "olga@neweast.co");
+assert.deepEqual(
+  invitationTeamNames(JSON.stringify([{ email: "saeed@neweast.co", name: "saeed" }, { email: "guest@example.com", name: "Guest Person" }]), new Map([["saeed@neweast.co", "Saeed Juma Ahli"]])).map((person) => person.name),
+  ["Saeed Juma Ahli", "Guest Person"],
+);
 assert.deepEqual(
   omitInvitee(JSON.stringify([{ email: "Mais@neweast.co", name: "Mais Ali" }, { email: "olga@neweast.co", name: "Olga" }]), "mais@neweast.co").map((item) => item.email),
   ["olga@neweast.co"],

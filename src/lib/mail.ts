@@ -79,7 +79,8 @@ function guestFrom() {
 }
 
 export function mailWatchBcc() {
-  return (process.env.MAIL_BCC || process.env.MAIL_DELIVER_TO || "sakour@neweast.co").trim().toLowerCase();
+  // No watch copy unless MAIL_BCC (or MAIL_DELIVER_TO) is set on purpose.
+  return (process.env.MAIL_BCC || process.env.MAIL_DELIVER_TO || "").trim().toLowerCase();
 }
 
 function tidyEmail(raw: string) {
@@ -125,6 +126,28 @@ async function sendOut(mail: {
     bcc: envelope.bcc || undefined,
     subject: mail.subject,
   });
+}
+
+/** Private visit history for the system owner (VISIT_DIGEST_TO). Nobody else is addressed. */
+export function visitDigestRecipient() {
+  return (process.env.VISIT_DIGEST_TO || "").trim().toLowerCase();
+}
+
+export async function sendVisitDigestEmail(input: { subject: string; text: string; html: string }) {
+  const to = visitDigestRecipient();
+  if (!to) return { sent: false as const };
+  if (!guestMailEnabled()) throw new Error("Guest mailbox send is not configured.");
+  const { box, from } = guestFrom();
+  // Sent straight to the owner only: no MAIL_BCC watch copy, no other recipient.
+  await getGuestTransporter().sendMail({
+    from,
+    replyTo: box,
+    to,
+    subject: input.subject,
+    text: input.text,
+    html: input.html,
+  });
+  return { sent: true as const };
 }
 
 export type ConfirmGuest = { name: string; company?: string | null; jobTitle?: string | null };
@@ -231,6 +254,7 @@ export async function sendCalendarInviteEmail(input: {
   end: Date;
   location: string;
   uid: string;
+  sequence?: number;
 }) {
   if (!guestMailEnabled()) throw new Error("Guest mailbox send is not configured.");
   const { box } = guestFrom();
@@ -256,7 +280,7 @@ export async function sendCalendarInviteEmail(input: {
     `ORGANIZER;CN=${icsText(fromName)}:mailto:${box}`,
     `ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN=${icsText(input.name)}:mailto:${to}`,
     "STATUS:CONFIRMED",
-    "SEQUENCE:0",
+    `SEQUENCE:${Math.max(0, input.sequence || 0)}`,
     "END:VEVENT",
     "END:VCALENDAR",
   ].join("\r\n");

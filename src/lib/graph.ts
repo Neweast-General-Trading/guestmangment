@@ -160,6 +160,26 @@ const GUEST_CITY_ROOMS = new Set(
   ].map((name) => name.toLowerCase()),
 );
 
+const KEPT_CITY_ROOMS: { name: string; email: string }[] = [
+  { name: "Berlin", email: "BerlinMeetingRoom@neweast.co" },
+  { name: "Dubai", email: "DubaiMeetingRoom@neweast.co" },
+  { name: "Riyadh", email: "RiyadhMeetingRoom@neweast.co" },
+  { name: "Shanghai", email: "ShanghaiMeetingRoom@neweast.co" },
+  { name: "Tokyo", email: "TokyoMeetingRoom@neweast.co" },
+];
+
+export function withKeptCityRooms(rooms: GraphRoom[]): GraphRoom[] {
+  const known = new Set(rooms.map((room) => room.email.trim().toLowerCase()));
+  const kept = KEPT_CITY_ROOMS.filter((room) => !known.has(room.email.toLowerCase())).map((room) => ({
+    name: room.name,
+    email: room.email,
+    capacity: null,
+    floor: "Ground floor",
+    available: true,
+  }));
+  return [...rooms, ...kept];
+}
+
 function roomLabelKey(name: string) {
   return name.trim().toLowerCase().replace(/_/g, " ").replace(/\s+/g, " ");
 }
@@ -187,19 +207,21 @@ export function isGuestBookableRoom(name: string, floor = "") {
 
 export async function listHqRooms(): Promise<GraphRoom[]> {
   const data = await graphJson<{ value?: PlaceRow[] }>("/places/microsoft.graph.room?$top=80");
-  return (data.value || [])
-    .filter((row) => {
-      if (!row.displayName || !row.emailAddress) return false;
-      if (!/negt_hq|negt hq/i.test(row.building || "")) return false;
-      return isGuestBookableRoom(row.displayName, row.floorLabel || "");
-    })
-    .map((row) => ({
-      name: row.displayName as string,
-      email: row.emailAddress as string,
-      capacity: row.capacity ?? null,
-      floor: row.floorLabel || "Ground floor",
-      available: true,
-    }));
+  return withKeptCityRooms(
+    (data.value || [])
+      .filter((row) => {
+        if (!row.displayName || !row.emailAddress) return false;
+        if (!/negt_hq|negt hq/i.test(row.building || "")) return false;
+        return isGuestBookableRoom(row.displayName, row.floorLabel || "");
+      })
+      .map((row) => ({
+        name: row.displayName as string,
+        email: row.emailAddress as string,
+        capacity: row.capacity ?? null,
+        floor: row.floorLabel || "Ground floor",
+        available: true,
+      })),
+  );
 }
 
 export function bookingTimeMatches(
@@ -272,6 +294,68 @@ export async function roomsWithAvailability(start: Date, end: Date): Promise<Gra
   }
 }
 
+export type RoomBusyItem = { iCalUId: string; subject: string; start: string; end: string };
+
+/**
+ * Bookings that hold a room between start and end, read straight from the room's own calendar.
+ * getSchedule can lag a few minutes after a booking moves, so conflict checks use this instead.
+ * Throws when Outlook cannot be read: callers must not treat "unknown" as "free".
+ */
+export async function roomBusyItems(
+  roomEmail: string,
+  start: Date,
+  end: Date,
+  ignoreICalUId?: string | null,
+): Promise<RoomBusyItem[]> {
+  const params = new URLSearchParams({
+    startDateTime: start.toISOString(),
+    endDateTime: end.toISOString(),
+    $select: "iCalUId,subject,start,end,showAs,isCancelled",
+    $top: "50",
+  });
+  const data = await graphJson<{
+    value?: {
+      iCalUId?: string;
+      subject?: string;
+      showAs?: string;
+      isCancelled?: boolean;
+      start?: { dateTime?: string };
+      end?: { dateTime?: string };
+    }[];
+  }>(`/users/${encodeURIComponent(roomEmail)}/calendarView?${params}`, {
+    headers: { Prefer: 'outlook.timezone="Asia/Dubai"' },
+  });
+  return (data.value || [])
+    .filter((item) => !item.isCancelled && item.showAs !== "free")
+    .filter((item) => !/^(canceled|cancelled)\s*:/i.test(item.subject || ""))
+    .filter((item) => !ignoreICalUId || item.iCalUId !== ignoreICalUId)
+    .map((item) => ({
+      iCalUId: item.iCalUId || "",
+      subject: item.subject || "",
+      start: item.start?.dateTime || "",
+      end: item.end?.dateTime || "",
+    }));
+}
+
+export async function assertRoomFreeInOutlook(
+  roomName: string,
+  start: Date,
+  end: Date,
+  ignore?: { eventId?: string | null; organizerEmail?: string },
+) {
+  const room = findRoomByName(await listHqRooms(), roomName);
+  if (!room) throw new Error(`Outlook does not know the room “${roomName}”.`);
+  const ownId = ignore?.eventId ? await readEventICalUId(ignore.eventId, ignore.organizerEmail).catch(() => "") : "";
+  let busy: RoomBusyItem[];
+  try {
+    busy = await roomBusyItems(room.email, start, end, ownId || null);
+  } catch {
+    throw new Error(`Could not check whether ${room.name} is free. Try again in a minute.`);
+  }
+  if (busy.length) throw new Error(`${room.name} is already booked at that time. Choose another room or time.`);
+  return room;
+}
+
 export type RoomReply = "accepted" | "declined" | "pending";
 
 export type SlotBooking = {
@@ -286,7 +370,8 @@ export type SlotBooking = {
 
 export type RoomSlot = { time: string; free: boolean; booking?: SlotBooking };
 
-export type RoomDayRow = GraphRoom & { slots: RoomSlot[] };
+/** `bookings` keeps every booking separately (slots keep only one per 30 minutes, so overlaps would hide). */
+export type RoomDayRow = GraphRoom & { slots: RoomSlot[]; bookings?: SlotBooking[] };
 
 export type GuestDayEvent = {
   id: string;
@@ -303,6 +388,8 @@ export type GuestDayEvent = {
   visitId?: string;
   href?: string;
   waiting?: string;
+  /** Room declined or released the booking while the visit is still active. */
+  roomLost?: boolean;
 };
 
 export function roomKey(value: string) {
@@ -412,6 +499,11 @@ export function attachGuestEvents(rooms: RoomDayRow[], events: GuestDayEvent[]) 
         end: { dateTime: event.end, timeZone: "Asia/Dubai" },
       },
     ]);
+    if (!event.cancelled && event.roomReply !== "declined" && event.start && event.end) {
+      // Our own meeting replaces the room calendar's copy of the same booking (same start and end).
+      room.bookings = (room.bookings || []).filter((b) => !(b.start === event.start && b.end === event.end));
+      room.bookings.push({ subject: event.subject, start: event.start, end: event.end, roomReply: event.roomReply, ours: true, description: event.description });
+    }
   }
   return rooms;
 }
@@ -577,10 +669,19 @@ export async function roomsDaySchedule(date: string): Promise<RoomDayRow[]> {
         free: !/[1-4]/.test(view[index] || "0"),
       }));
       applyScheduleItems(slots, row?.scheduleItems);
+      const bookings: SlotBooking[] = (row?.scheduleItems || [])
+        .filter((item) => !isReleasedBooking(item))
+        .map((item) => ({
+          subject: item.subject?.trim() || "Busy",
+          start: toDubaiClock(item.start?.dateTime, (item.start as { timeZone?: string } | undefined)?.timeZone),
+          end: toDubaiClock(item.end?.dateTime, (item.end as { timeZone?: string } | undefined)?.timeZone),
+        }))
+        .filter((item) => item.start && item.end);
       return {
         ...room,
         available: slots.every((slot) => slot.free),
         slots,
+        bookings,
       };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -755,15 +856,11 @@ export async function bookGuestRoom(input: {
     throw new Error("Guest Management only books ground-floor city rooms.");
   }
   const organizer = (input.organizerEmail || mailbox()).trim() || mailbox();
-  const rooms = await listHqRooms();
-  const room = findRoomByName(rooms, input.roomName);
-  if (!room) throw new Error(`Outlook does not know the room “${input.roomName}”.`);
-  const busy = await roomsWithAvailability(input.start, input.end);
-  const slot = busy.find((item) => item.email.toLowerCase() === room.email.toLowerCase());
-  // ponytail: skip free/busy when PATCHing so our own event is not treated as a conflict.
-  if (slot && !slot.available && !input.eventId) {
-    throw new Error(`${room.name} is busy at that time.`);
-  }
+  // Checks new bookings and edits alike; an edit ignores its own event, and an unreadable calendar blocks the booking.
+  const room = await assertRoomFreeInOutlook(input.roomName, input.start, input.end, {
+    eventId: input.eventId,
+    organizerEmail: organizer,
+  });
   if (!input.eventId) {
     const day = dubaiStamp(input.start).slice(0, 10);
     const startClock = dubaiStamp(input.start).slice(11, 16);
@@ -1129,6 +1226,50 @@ export async function acceptBookerMeeting(userEmail: string, iCalUId: string) {
     body: JSON.stringify({ sendResponse: false }),
   });
   return id;
+}
+
+export async function placePersonalCalendarMeeting(
+  userEmail: string,
+  input: { subject: string; description?: string; start: Date; end: Date; location: string },
+) {
+  const email = userEmail.trim();
+  if (!email.includes("@")) throw new Error("Choose a person on the invitation.");
+  const stamp = dubaiStamp(input.start);
+  const day = stamp.slice(0, 10);
+  const clock = stamp.slice(11, 16);
+  const existing = await listMailboxDayEvents(email, day);
+  const found = existing.find((event) => !event.cancelled && event.subject === input.subject && event.start === clock);
+  if (found?.id) return found.id;
+  const created = await graphJson<{ id?: string }>(`/users/${encodeURIComponent(email)}/events`, {
+    method: "POST",
+    body: JSON.stringify({
+      subject: input.subject,
+      body: { contentType: "text", content: input.description?.trim() || input.location },
+      start: { dateTime: stamp, timeZone: "Asia/Dubai" },
+      end: { dateTime: dubaiStamp(input.end), timeZone: "Asia/Dubai" },
+      location: { displayName: input.location },
+      showAs: "busy",
+      isReminderOn: true,
+      reminderMinutesBeforeStart: 15,
+      responseRequested: false,
+    }),
+  });
+  if (!created.id) throw new Error("Outlook did not put the meeting on the calendar.");
+  return created.id;
+}
+
+export async function removePersonalCalendarMeeting(
+  userEmail: string,
+  input: { subject: string; start: Date },
+) {
+  const email = userEmail.trim();
+  if (!email.includes("@")) return;
+  const stamp = dubaiStamp(input.start);
+  const existing = await listMailboxDayEvents(email, stamp.slice(0, 10));
+  const hits = existing.filter(
+    (event) => !event.cancelled && event.id && event.subject === input.subject && event.start === stamp.slice(11, 16),
+  );
+  for (const hit of hits) await deleteUserCalendarEvent(email, hit.id);
 }
 
 export async function createBookerCalendarEvent(

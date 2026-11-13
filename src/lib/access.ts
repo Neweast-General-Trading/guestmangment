@@ -8,6 +8,7 @@ const FULL_ACCESS_EMAILS = new Set([
   ACCESS_ADMIN_EMAIL,
   "guru@neweast.co",
   "guru@neweast.com",
+  "ashwin@neweast.co",
 ]);
 
 const ROOMS_VIEW_EMAILS = new Set(["maria@neweast.com", "carina@neweast.co", "hannah@neweast.co"]);
@@ -31,6 +32,7 @@ export function isRoomBooker(email?: string | null) {
 
 const TRACKING_EMAILS = new Set([
   ACCESS_ADMIN_EMAIL,
+  "ashwin@neweast.co",
   "salma.moufallah@neweast.com",
   "salma.moufallah@neweast.co",
 ]);

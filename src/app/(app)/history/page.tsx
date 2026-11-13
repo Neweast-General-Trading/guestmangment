@@ -1,3 +1,4 @@
+import { requestNow } from "@/lib/visit-order";
 import { PageHeader } from "@/components/ui";
 import { VisitFilters } from "@/components/filters";
 import { VisitTable } from "@/components/visit-table";
@@ -14,14 +15,17 @@ export default async function HistoryPage({
   const params = await searchParams;
   const [{ departments }, visits] = await Promise.all([
     lookups(),
-    searchVisits(session, { ...params, take: 120 }),
+    searchVisits(session, { ...params, take: 120, order: "newest", scope: "history" }),
   ]);
 
   return (
     <div>
-      <PageHeader title="Visit history" description="Search previous visitors by person, host, department, purpose, or visit ID." />
+      <PageHeader
+        title="Visit history"
+        description="Visits that are over: passed, finished, cancelled or rejected. Newest first, grouped by day."
+      />
       <VisitFilters departments={departments} defaults={params} />
-      <VisitTable visits={visits} />
+      <VisitTable visits={visits} now={requestNow()} empty="No past visits yet." />
     </div>
   );
 }

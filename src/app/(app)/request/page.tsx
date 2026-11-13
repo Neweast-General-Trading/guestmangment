@@ -1,3 +1,4 @@
+import { requestNow } from "@/lib/visit-order";
 import Link from "next/link";
 import { CancelVisit } from "@/components/cancel-visit";
 import { StaffRequestForm } from "@/components/staff-request-form";
@@ -6,7 +7,9 @@ import { Card, Empty, PageHeader } from "@/components/ui";
 import { canUseRequestDesk, isRoomBooker } from "@/lib/access";
 import { requireSession } from "@/lib/auth";
 import { GUEST_KIND_LABEL, type GuestKind } from "@/lib/constants";
-import { fmtDateTime } from "@/lib/format";
+import { fmtTime } from "@/lib/format";
+import { DayHeader, WhenChip } from "@/components/day-header";
+import { groupByDay, relativeWhen, upcomingFirst, visitEnd } from "@/lib/visit-order";
 import { mayCancelVisit } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { preparationNote } from "@/lib/preparation";
@@ -30,6 +33,7 @@ export default async function StaffRequestPage({
     direct?: string;
     decided?: string;
     tab?: string;
+    files?: string;
   }>;
 }) {
   const session = await requireSession();
@@ -46,6 +50,7 @@ export default async function StaffRequestPage({
     }),
   ]);
 
+  const now = requestNow();
   const canDesk = canUseRequestDesk(session);
   const tab: Tab = query.tab === "history" || !canDesk ? "history" : "new";
 
@@ -63,6 +68,11 @@ export default async function StaffRequestPage({
       {query.sent ? (
         <p className="mb-4 rounded-md border border-[#d7e6da] bg-[var(--tint-sage)] px-3 py-2 text-[13px]">
           {query.sent} sent to reception.
+        </p>
+      ) : null}
+      {query.files ? (
+        <p className="mb-4 rounded-md border border-[#ead8d8] bg-[var(--tint-peach)] px-3 py-2 text-[13px] text-[var(--brand-ink)]">
+          {query.files}
         </p>
       ) : null}
       {isRoomBooker(session.email) ? (
@@ -135,7 +145,10 @@ export default async function StaffRequestPage({
       {tab === "history" ? (
         mine.length ? (
           <div className="space-y-3">
-            {mine.map((visit) => {
+            {groupByDay(upcomingFirst(mine, now), now).map((group) => (
+              <div key={group.key} className="space-y-3">
+                <DayHeader group={{ ...group, count: group.items.length }} />
+            {group.items.map((visit) => {
               const guest = visit.visitors[0]?.visitor.fullName;
               const kind = (visit.guestKind || "GUEST") as GuestKind;
               return (
@@ -156,8 +169,10 @@ export default async function StaffRequestPage({
                       </div>
                     </div>
                     <div className="mt-3 flex items-end justify-between gap-3 border-t border-[var(--line)] pt-2">
-                      <p className="text-[12px] text-[var(--muted)]">
-                        {fmtDateTime(visit.expectedArrival)} · {guest || `${visit.visitorCount} guests`}
+                      <p className="flex flex-wrap items-center gap-x-1 text-[12px] text-[var(--muted)]">
+                        <WhenChip label={relativeWhen(visit, now)} tone={group.tone} />
+                        <span className="font-semibold text-[var(--ink)] tabular-nums">{fmtTime(visit.expectedArrival)}–{fmtTime(visitEnd(visit))}</span>
+                        · {guest || `${visit.visitorCount} guests`}
                         {visit.driverRequired ? " · Driver" : ""}
                         {visit.giftRequired ? ` · Gift${visit.giftType ? ` (${visit.giftType})` : ""}` : ""}
                         {visit.gatePassRequired ? " · Gate pass" : ""}
@@ -173,6 +188,8 @@ export default async function StaffRequestPage({
                 </Card>
               );
             })}
+              </div>
+            ))}
           </div>
         ) : (
           <Card>

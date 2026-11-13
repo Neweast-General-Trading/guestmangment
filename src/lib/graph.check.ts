@@ -9,6 +9,7 @@ import {
   bookingTimeMatches,
   sameBookingWindow,
   isGuestBookableRoom,
+  withKeptCityRooms,
   isOtherFloorRoom,
   isReleasedBooking,
   isRoomReplyMail,
@@ -34,6 +35,9 @@ assert.equal(roomIsFree("0"), true);
 assert.equal(roomIsFree("02"), false);
 assert.equal(roomIsFree("1"), false);
 assert.equal(roomIsFree(""), true);
+const kept = withKeptCityRooms([]);
+assert.deepEqual(kept.map((room) => room.name), ["Berlin", "Dubai", "Riyadh", "Shanghai", "Tokyo"]);
+assert.equal(withKeptCityRooms([kept[1]]).filter((room) => room.name === "Dubai").length, 1);
 
 const rooms = [
   { name: "VIP Conference", email: "vip.conference@neweast.co", capacity: 8, floor: "1", available: true },
